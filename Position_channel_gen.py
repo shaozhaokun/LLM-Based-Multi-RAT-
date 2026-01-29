@@ -84,6 +84,9 @@ class RATDistanceCalculator:
 
         self.RAT_positions = np.vstack([terrestrial_positions, sat_positions])
         
+        # Gateway 位置（用于卫星到网关的下行链路，固定在原点地面）
+        self.gateway_pos = np.array([0.0, 0.0, 0.0], dtype=float)
+        
         # 可选：如果你想用不同的布局，可以取消注释下面的配置
         # 方案2：6G 和 Wi-Fi 更分散
         # self.RAT_positions = np.array([
@@ -264,8 +267,69 @@ class RATDistanceCalculator:
         Gain = np.tile(gain_per_rat, (self.eMBB_num + self.URLLC_num, 1))
 
         channel = channel_ * np.sqrt(Gain)
-
-
         
+        # ------------------------------------------------
+        # 卫星 -> Gateway 下行链路（与用户无关，常数列）
+        # 使用与用户 -> 卫星相同的物理模型（Friis + 天线增益），
+        # 但“用户位置”固定为 gateway 位置，因此对所有用户是相同的值。
+        # 这里按照你的需求，对每一颗卫星分别计算：
+        #   - 一列：该卫星到 gateway 的距离
+        #   - 一列：该卫星到 gateway 的下行信道增益（无小尺度衰落，确定性值）
+        # 如果 M3=2，则总共增加 2 列距离 + 2 列信道，一共 4 列；
+        # 你目前的设置是 M1=2, M2=2, M3=2，则最后形状是 (24, 6 + 2) = (24, 8)，
+        # 对应：2 个 6G + 2 个 WiFi + 2 个用户->卫星 + 2 个卫星->gateway。
+        # ------------------------------------------------
+        gateway_pos = self.gateway_pos
+        if len(sat_indices) > 0:
+            d_gw_list = []
+            ch_gw_list = []
+            for s, sat_idx in enumerate(sat_indices):
+                sat_pos = self.RAT_positions[sat_idx, :]
+                # 距离：该卫星到 gateway 的 3D 距离（常数）
+                d_gw = np.linalg.norm(sat_pos - gateway_pos)
+                d_gw_list.append(d_gw)
+
+                # 采用与上行相同的卫星链路物理模型来计算信道增益
+                f_up = self.f_up_sat[s] if s < self.f_up_sat.shape[0] else self.f_up_sat[-1]
+                A_trans = self.g_sat[s] if s < self.g_sat.shape[0] else self.g_sat[-1]
+                A_rec = self.G_sat[s] if s < self.G_sat.shape[0] else self.G_sat[-1]
+
+                # 仰角计算：把 gateway 看成“用户”，位置固定
+                delta_h = sat_pos[2] - gateway_pos[2]
+                d_horizontal = np.sqrt(
+                    (sat_pos[0] - gateway_pos[0]) ** 2 +
+                    (sat_pos[1] - gateway_pos[1]) ** 2
+                )
+                theta_rad = np.arctan2(delta_h, d_horizontal + eps)
+                theta_deg = np.rad2deg(theta_rad)
+
+                # 辐射方向图 Γ(θ)（和上面卫星链路相同的公式）
+                if np.abs(theta_deg - 90.0) <= 1e-6:
+                    Gamma_gw = 1.0
+                else:
+                    cos_theta = np.cos(theta_rad)
+                    arg = 20.0 * np.pi * cos_theta
+                    j1_val = j1(arg)
+                    ratio = np.where(np.abs(arg) > eps, j1_val / arg, 0.5)
+                    Gamma_gw = 4.0 * np.abs(ratio) ** 2
+
+                C = self.c_light
+                L_gw = d_gw
+                F_Hz = f_up
+                fspl_factor_gw = (C / (4.0 * np.pi * L_gw * F_Hz + eps)) ** 2
+                ch_mag_gw = A_trans * A_rec * Gamma_gw * fspl_factor_gw
+
+                ch_gw_list.append(ch_mag_gw)
+
+            # 变成数组，形状 (1, M3)
+            d_gw_arr = np.array(d_gw_list, dtype=float)[np.newaxis, :]
+            ch_gw_arr = np.array(ch_gw_list, dtype=float)[np.newaxis, :]
+
+            # 扩展为所有用户：(num_users, M3)
+            d_gw_cols = np.tile(d_gw_arr, (num_users, 1))
+            ch_gw_cols = np.tile(ch_gw_arr, (num_users, 1))
+
+            dk_m = np.concatenate([dk_m, d_gw_cols], axis=1)
+            channel = np.concatenate([channel, ch_gw_cols], axis=1)
         
-        return dk_m,channel
+        return dk_m, channel

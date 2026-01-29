@@ -9,10 +9,14 @@ from WF import water_filling_power_allocation
 
 
 class MyproblemInner:
-    def __init__(self, URLLC_num, eMBB_num, RAT_num, seed, outer_ass,ch,num_list):
+    def __init__(self, URLLC_num, eMBB_num, RAT_num_cure, seed, outer_ass,ch,num_list,RAT_list):
         self.URLLC_num = URLLC_num
         self.eMBB_num = eMBB_num
-        self.RAT_num = RAT_num
+        self.RAT_num_cure = RAT_num_cure
+        self.RAT_num = sum(RAT_list)                 # 总的RAT数量      2,2,2,2    -> 8
+        self.RAT_num_up = sum(RAT_list) - RAT_list[3]  # 上行的RAT数量  2,2,2      -> 6
+        self.RAT_num_down = RAT_list[3]                 # 下行的RAT数量       2    ->2
+
         self.seed = seed
         self.outer_ass_ = outer_ass  #  (,D) 
         self.ch = ch   # channel ((eMBB+URLLC),RAT_num)
@@ -20,6 +24,7 @@ class MyproblemInner:
         self.generation = 100        # inner generation
         self.embb = eMBB_num * RAT_num
         self.num_list = num_list   # [k1_u,k2_u,k3_u,k1_e,k2_e,k3_e]
+        self.RAT_list = RAT_list   # [6G_BSs_num,Wi-Fi_BSs_num,Satellite_BSs_num]
 
 
 
@@ -30,12 +35,18 @@ class MyproblemInner:
 
         self.W_6g = 50 * 1e6     # 50 MHz
         self.W_wifi = 10 * 1e6     # 10 MHz
-        self.W_sat = 30 * 1e6     # 30 MHz
+        self.W_sat_Up = 30 * 1e6     # 30 MHz   
+        self.W_sat_Down = 30 * 1e6     # 30 MHz 卫星上行和下行的带宽是分开的
+
 
         
         self.W_6g_ = 4 * 1e5   
         self.W_wifi_ = 1.5 * 1e5    
-        self.W_sat_ = 3* 1e5    
+
+        self.W_sat_eMBB_up = 3* 1e5    
+        self.W_sat_URLLC_up = 3* 1e5    
+        self.W_sat_URLLC_down = 3* 1e5     # urllc 和 embb 进行分开分配
+        self.W_sat_eMBB_down = 3* 1e5    
 
         # 根据 RAT 索引设置回传容量 C_vec（单位：bit/s）
         # RAT 0, 1: 6G BSs (M1)
@@ -47,11 +58,12 @@ class MyproblemInner:
         self.C_vec = np.array([C_6g, C_6g, C_wifi, C_wifi, C_sat, C_sat])  # 对应 RAT 0,1,2,3,4,5
 
         lb_band_URLLC = [0]* self.URLLC_num * self.RAT_num
-        ub_band_URLLC = [self.W_6g_,self.W_6g_,self.W_wifi_,self.W_wifi_, self.W_sat_, self.W_sat_ ] * self.URLLC_num 
+        ub_band_URLLC = ([self.W_6g_] * self.RAT_list[0] + [self.W_wifi_] * self.RAT_list[1] +
+                   [self.W_sat_URLLC_up] * self.RAT_list[2]+[self.W_sat_URLLC_down] * self.RAT_list[2]) * self.URLLC_num
 
-        lb_band_eMBB = [0] *self.eMBB_num * self.RAT_num                       #K_e * M
-        ub_band_eMBB = [self.W_6g_,self.W_6g_,self.W_wifi_,self.W_wifi_, self.W_sat_, self.W_sat_ ] * self.eMBB_num
-
+        lb_band_eMBB = [0] *self.eMBB_num * self.RAT_num                     #K_e * M
+        ub_band_eMBB = ([self.W_6g_] * self.RAT_list[0] + [self.W_wifi_] * self.RAT_list[1] +
+                      [self.W_sat_eMBB_up] * self.RAT_list[2]+[self.W_sat_eMBB_down] * self.RAT_list[2]) * self.eMBB_num
 
         self.lb =     np.array( lb_band_eMBB + lb_band_URLLC).reshape(1,self.chromosome_length)
         self.ub =    np.array(ub_band_eMBB + ub_band_URLLC ).reshape(1,self.chromosome_length)  # 1 X D
@@ -155,19 +167,27 @@ class MyproblemInner:
         Vars = X  # 获取决策变量矩阵
         NIND = Vars.shape[0]
         
-
-        urllc_band = Vars[:,:self.URLLC_num*self.RAT_num]
-        embb_band = Vars[:,self.URLLC_num*self.RAT_num:self.chromosome_length]
-
+        matrix = Vars.reshape(NIND,self.eMBB_num+self.URLLC_num,self.RAT_num) # NIND x (eMBB_num+URLLC_num) x RAT_num
+        W_matrix_up = matrix[:,:,:self.RAT_num_up] # NIND x (eMBB_num+URLLC_num) x RAT_num_up
+        W_matrix_down = matrix[:,:,self.RAT_num_up:] # NIND x (eMBB_num+URLLC_num) x RAT_num_down
+        
+       
     
-        embb_band_reshape = embb_band.reshape(NIND,self.eMBB_num,self.RAT_num)
-        urllc_band_reshape = urllc_band.reshape(NIND,self.URLLC_num,self.RAT_num)
+        urllc_band_reshape_up = W_matrix_up[:,:self.URLLC_num,:]  # NIND x URLLC_num x RAT_num_up
+        embb_band_reshape_up  = W_matrix_up[:,self.URLLC_num:,:]  # NIND x eMBB_num x RAT_num_up
+        urllc_band_reshape_down = W_matrix_down[:,:self.URLLC_num,:]  # NIND x URLLC_num x RAT_num_down
+        embb_band_reshape_down = W_matrix_down[:,self.URLLC_num:,:]  # NIND x eMBB_num x RAT_num_down
 
-        embb_band_matrix = embb_band_reshape      # NIND x embb_num x rat num  
-        urllc_band_matrix = urllc_band_reshape    # NIND x URLLC_num x rat num
 
-        binary_matrix_embb =  (embb_band_matrix != 0).astype(int)
-        binary_matrix_urllc =  (urllc_band_matrix != 0).astype(int)
+        embb_band_matrix_up = embb_band_reshape_up       
+        urllc_band_matrix_up = urllc_band_reshape_up    
+        embb_band_matrix_down = embb_band_reshape_down     
+        urllc_band_matrix_down = urllc_band_reshape_down    
+
+        binary_matrix_embb_up =  (embb_band_matrix_up != 0).astype(int)
+        binary_matrix_urllc_up =  (urllc_band_matrix_up != 0).astype(int)
+        binary_matrix_embb_down =  (embb_band_matrix_down != 0).astype(int)
+        binary_matrix_urllc_down =  (urllc_band_matrix_down != 0).astype(int)
 
 
         
@@ -179,44 +199,53 @@ class MyproblemInner:
         P_k = 0.2 # wt
 
         channel = self.ch
-        URLLC_h = channel[:self.URLLC_num,:]
-        eMBB_h =  channel[self.URLLC_num:self.URLLC_num+self.eMBB_num,:]
+        channel_up = channel[:,:self.RAT_num_up]
+        channel_down = channel[:,self.RAT_num_up:]
+
+        URLLC_h_up = channel_up[:self.URLLC_num,:]
+        eMBB_h_up =  channel_up[self.URLLC_num:self.URLLC_num+self.eMBB_num,:]
+        URLLC_h_down = channel_down[:self.URLLC_num,:]
+        eMBB_h_down =  channel_down[self.URLLC_num:self.URLLC_num+self.eMBB_num,:]
 
 
-        URLLC_h = np.tile(URLLC_h, (NIND, 1, 1))
-        eMBB_h = np.tile(eMBB_h, (NIND, 1, 1))
+        URLLC_h_up = np.tile(URLLC_h_up, (NIND, 1, 1))
+        eMBB_h_up = np.tile(eMBB_h_up, (NIND, 1, 1))
+        URLLC_h_down = np.tile(URLLC_h_down, (NIND, 1, 1))
+        eMBB_h_down = np.tile(eMBB_h_down, (NIND, 1, 1))
 
-        # 计算 eMBB 功率分配情况（water-filling），提取到独立模块 WF.py
+
+
+
+        # *************** uplink ***************
+
+        # 计算 eMBB 功率分配情况（water-filling）在uplink上，提取到独立模块 WF.py
         embb_power_matrix = water_filling_power_allocation(
-            embb_band_matrix=embb_band_matrix,
-            eMBB_h=eMBB_h,
+            embb_band_matrix_up=embb_band_matrix_up,
+            eMBB_h_up=eMBB_h_up,
             N0=N0,
-            P_k=P_k,
+             P_k=P_k,
             C_vec=self.C_vec,
         )
 
-
-        # 第一阶段，first-hop 传输
-
         eps = 1e-10
-        denominator_urllc = ( N0 * urllc_band_matrix) + eps
-        rk_m_urllc_ = urllc_band_matrix * np.log2(1 + (abs(URLLC_h)**2 * 0.2) / denominator_urllc)  # NIND x embb_num x rat num
+        denominator_urllc = ( N0 * urllc_band_matrix_up) + eps
+        rk_m_urllc_ = urllc_band_matrix_up * np.log2(1 + (abs(URLLC_h_up)**2 * 0.2) / denominator_urllc)  # NIND x embb_num x rat num
         rk_m_urllc = np.where(np.isnan(rk_m_urllc_), 0, rk_m_urllc_)  # 把nan值变成0
         rk_m_urllc_sum = np.sum(rk_m_urllc,axis=2,keepdims=1) # (NIND,1,1)
 
 
-        denominator_embb = ( N0 * embb_band_matrix) + eps
-        rk_m_embb_ = embb_band_matrix  * np.log2(1 + (abs(eMBB_h)**2 * embb_power_matrix) / denominator_embb)
+        denominator_embb = ( N0 * embb_band_matrix_up) + eps
+        rk_m_embb_ = embb_band_matrix_up  * np.log2(1 + (abs(eMBB_h_up)**2 * embb_power_matrix) / denominator_embb)
 
         rk_m_embb = np.where(np.isnan(rk_m_embb_), 0, rk_m_embb_)  # 把nan值变成0
 
         # SE check
-        SE_urllc_ = np.sum(np.log2(1 + (abs(URLLC_h)**2 * 0.2) / denominator_urllc)*binary_matrix_urllc,axis=2)
-        SE_urllc_test = np.mean(np.log2(1 + (abs(URLLC_h)**2 * 0.2) / denominator_urllc)*binary_matrix_urllc,axis=1)
+        SE_urllc_ = np.sum(np.log2(1 + (abs(URLLC_h_up)**2 * 0.2) / denominator_urllc)*binary_matrix_urllc_up,axis=2)
+        SE_urllc_test = np.mean(np.log2(1 + (abs(URLLC_h_up)**2 * 0.2) / denominator_urllc)*binary_matrix_urllc_up,axis=1)
         SE_urllc = np.mean(SE_urllc_,axis=1)
 
-        SE_eMBB_ = np.sum(np.log2(1 + (abs(eMBB_h)**2 * embb_power_matrix) / denominator_embb)*binary_matrix_embb,axis=2)
-        SE_eMBB_test = np.mean(np.log2(1 + (abs(eMBB_h)**2 * embb_power_matrix) / denominator_embb)*binary_matrix_embb,axis=1)
+        SE_eMBB_ = np.sum(np.log2(1 + (abs(eMBB_h_up)**2 * embb_power_matrix) / denominator_embb)*binary_matrix_embb_up,axis=2)
+        SE_eMBB_test = np.mean(np.log2(1 + (abs(eMBB_h_up)**2 * embb_power_matrix) / denominator_embb)*binary_matrix_embb_up,axis=1)
         SE_eMBB = np.mean(SE_eMBB_,axis=1)
 
 
@@ -465,7 +494,17 @@ if __name__=="__main__":
     k_embb = k1_e + k2_e + k3_e 
     k_urllc = k1_u + k2_u + k3_u 
     num_list =[k1_u,k2_u,k3_u,k1_e,k2_e,k3_e]
+    
     RAT_num = 6
+    SixG_BSs_num = 2
+    WiFi_BSs_num = 2
+    Satellite_BSs_num = 2
+    RAT_num = SixG_BSs_num + WiFi_BSs_num + Satellite_BSs_num
+    RAT_list = np.array([SixG_BSs_num,WiFi_BSs_num,Satellite_BSs_num,Satellite_BSs_num])
+
+
+
+
     seed = np.random.seed(42)
     # outer= np.ones((k_urllc+k_embb,RAT_num))   # LLM (GPT),association  
     outer = np.array([[1,0,0,0,0,0],[0,1,0,0,0,0],[0,0,1,0,0,0],[0,0,0,1,0,0],     # k1_u
@@ -474,12 +513,15 @@ if __name__=="__main__":
                      [1,0,1,0,0,0],[1,0,0,1,0,0],[1,0,1,0,0,0],[0,1,0,1,0,0],     # k1_e
                      [0,0,0,0,1,1],[0,0,0,0,1,1],[0,0,0,0,1,1],[0,0,0,0,1,1],     # k2_e
                      [0,1,0,1,1,0],[1,0,1,0,1,0],[1,0,1,0,0,1],[0,1,1,0,1,0]])     # k3_e
+    
+
+    outer = np.concatenate([outer, outer[:, 4:6]], axis=1)
 
     calculator = RATDistanceCalculator(urllc_num = k_urllc, embb_num = k_embb,RAT_num = RAT_num,time_ = seed )
-    user_positions = calculator.generate_user_positions()
-    dk_m,channel = calculator.calculate_DistancesAndChennel(user_positions)
+    user_positions = calculator.generate_user_positions()    # （24，3）个用户的位置
+    dk_m,channel = calculator.calculate_DistancesAndChennel(user_positions) # （24，6）个用户到各RAT的距离和信道增益
     # ch = np.ones((k_embb+k_urllc,RAT_num))
 
-    Inner = MyproblemInner(k_urllc,k_embb,RAT_num,seed,outer,channel,num_list)
+    Inner = MyproblemInner(k_urllc,k_embb,RAT_num,seed,outer,channel,num_list,RAT_list)
     population_best,fitness_best,CV_best,cost_urllc_best  =  Inner.run_origin()
 

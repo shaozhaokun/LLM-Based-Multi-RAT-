@@ -167,7 +167,7 @@ def _capped_water_filling_single_user(W_row, h_row, N0, P_k, C_vec):
     return p_final
 
 
-def water_filling_power_allocation(embb_band_matrix, eMBB_h, N0, P_k, C_vec=None):
+def water_filling_power_allocation(embb_band_matrix_up, eMBB_h_up, N0, P_k, C_vec=None):
     """
     计算 eMBB 的功率分配。
 
@@ -184,30 +184,30 @@ def water_filling_power_allocation(embb_band_matrix, eMBB_h, N0, P_k, C_vec=None
     返回:
         embb_power_matrix: np.ndarray，形状同 embb_band_matrix，对应功率分配矩阵
     """
-    NIND, eMBB_num, RAT_num = embb_band_matrix.shape
+    NIND, eMBB_num, RAT_num = embb_band_matrix_up.shape
 
     # 如果没有提供 C_vec，使用原始 water-filling（无线单跳）
     if C_vec is None:
-        embb_band_sumaxis_2 = np.sum(embb_band_matrix, axis=2, keepdims=True)
+        embb_band_sumaxis_2 = np.sum(embb_band_matrix_up, axis=2, keepdims=True)
         embb_band_sumaxis = np.sum(
-            embb_band_matrix * N0 / np.abs(eMBB_h) ** 2,
+            embb_band_matrix_up * N0 / np.abs(eMBB_h_up) ** 2,
             axis=2,
             keepdims=True,
         )
         miu_ = (P_k + embb_band_sumaxis) / embb_band_sumaxis_2
         miu = np.tile(miu_, (1, 1, RAT_num))
-        embb_power_matrix = embb_band_matrix * (miu - N0 / np.abs(eMBB_h) ** 2)
+        embb_power_matrix = embb_band_matrix_up * (miu - N0 / np.abs(eMBB_h) ** 2)
         return embb_power_matrix
 
     # 有固定的每 RAT 回传容量 C_vec，执行截断水填充（按用户、按 RAT）
     C_vec = np.asarray(C_vec, dtype=float).reshape(-1)
     assert C_vec.shape[0] == RAT_num, "C_vec 的长度必须等于 RAT_num"
 
-    embb_power_matrix = np.zeros_like(embb_band_matrix, dtype=float)
+    embb_power_matrix = np.zeros_like(embb_band_matrix_up, dtype=float)
     for i in range(NIND):
         for k in range(eMBB_num):
-            W_row = embb_band_matrix[i, k, :]
-            h_row = eMBB_h[i, k, :]
+            W_row = embb_band_matrix_up[i, k, :]
+            h_row = eMBB_h_up[i, k, :]
             p_row = _capped_water_filling_single_user(W_row, h_row, N0, P_k, C_vec)
             embb_power_matrix[i, k, :] = p_row
 
