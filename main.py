@@ -16,6 +16,8 @@ class MyproblemInner:
         self.RAT_num = sum(RAT_list)                 # 总的RAT数量      2,2,2,2    -> 8
         self.RAT_num_up = sum(RAT_list) - RAT_list[3]  # 上行的RAT数量  2,2,2      -> 6
         self.RAT_num_down = RAT_list[3]                 # 下行的RAT数量       2    ->2
+        self.RAT_num_sat = RAT_list[2]
+        self.RAT_num_terrestrial = self.RAT_num_cure - RAT_list[2]
 
         self.seed = seed
         self.outer_ass_ = outer_ass  #  (,D) 
@@ -29,7 +31,7 @@ class MyproblemInner:
 
 
 
-        self.chromosome_length = (self.eMBB_num +self.URLLC_num) * self.RAT_num    # （K_u + K_e）* M     
+        self.chromosome_length = (self.eMBB_num +self.URLLC_num) * self.RAT_num     # （K_u + K_e）* M     
         self.outer_ass = self.outer_ass_.reshape(1,self.chromosome_length)
         self.outer_ass_reshape = self.outer_ass.reshape(-1,self.RAT_num) 
 
@@ -46,7 +48,10 @@ class MyproblemInner:
         self.W_sat_eMBB_up = 3* 1e5    
         self.W_sat_URLLC_up = 3* 1e5    
         self.W_sat_URLLC_down = 3* 1e5     # urllc 和 embb 进行分开分配
-        self.W_sat_eMBB_down = 3* 1e5    
+        self.W_sat_eMBB_down = 3* 1e5
+        
+        # URLLC下行功率 (每个卫星BS的URLLC下行传输功率，单位：W)
+        self.L_sat_URLLC_down = 100.0  # 1 W，可根据实际模型调整    
 
         # 根据 RAT 索引设置回传容量 C_vec（单位：bit/s）
         # RAT 0, 1: 6G BSs (M1)
@@ -60,6 +65,8 @@ class MyproblemInner:
         lb_band_URLLC = [0]* self.URLLC_num * self.RAT_num
         ub_band_URLLC = ([self.W_6g_] * self.RAT_list[0] + [self.W_wifi_] * self.RAT_list[1] +
                    [self.W_sat_URLLC_up] * self.RAT_list[2]+[self.W_sat_URLLC_down] * self.RAT_list[2]) * self.URLLC_num
+
+        # 下行用全部带宽的
 
         lb_band_eMBB = [0] *self.eMBB_num * self.RAT_num                     #K_e * M
         ub_band_eMBB = ([self.W_6g_] * self.RAT_list[0] + [self.W_wifi_] * self.RAT_list[1] +
@@ -219,7 +226,7 @@ class MyproblemInner:
         # *************** uplink ***************
 
         # 计算 eMBB 功率分配情况（water-filling）在uplink上，提取到独立模块 WF.py
-        embb_power_matrix = water_filling_power_allocation(
+        embb_power_matrix_up = water_filling_power_allocation(
             embb_band_matrix_up=embb_band_matrix_up,
             eMBB_h_up=eMBB_h_up,
             N0=N0,
@@ -235,7 +242,7 @@ class MyproblemInner:
 
 
         denominator_embb = ( N0 * embb_band_matrix_up) + eps
-        rk_m_embb_ = embb_band_matrix_up  * np.log2(1 + (abs(eMBB_h_up)**2 * embb_power_matrix) / denominator_embb)
+        rk_m_embb_ = embb_band_matrix_up  * np.log2(1 + (abs(eMBB_h_up)**2 * embb_power_matrix_up) / denominator_embb)
 
         rk_m_embb = np.where(np.isnan(rk_m_embb_), 0, rk_m_embb_)  # 把nan值变成0
 
@@ -244,39 +251,17 @@ class MyproblemInner:
         SE_urllc_test = np.mean(np.log2(1 + (abs(URLLC_h_up)**2 * 0.2) / denominator_urllc)*binary_matrix_urllc_up,axis=1)
         SE_urllc = np.mean(SE_urllc_,axis=1)
 
-        SE_eMBB_ = np.sum(np.log2(1 + (abs(eMBB_h_up)**2 * embb_power_matrix) / denominator_embb)*binary_matrix_embb_up,axis=2)
-        SE_eMBB_test = np.mean(np.log2(1 + (abs(eMBB_h_up)**2 * embb_power_matrix) / denominator_embb)*binary_matrix_embb_up,axis=1)
+        SE_eMBB_ = np.sum(np.log2(1 + (abs(eMBB_h_up)**2 * embb_power_matrix_up) / denominator_embb)*binary_matrix_embb_up,axis=2)
+        SE_eMBB_test = np.mean(np.log2(1 + (abs(eMBB_h_up)**2 * embb_power_matrix_up) / denominator_embb)*binary_matrix_embb_up,axis=1)
         SE_eMBB = np.mean(SE_eMBB_,axis=1)
 
-
-        # 第二阶段，second-hop 传输
-
                                                        
-        
-        # 带宽约束项
-        RAT_5G = np.sum(embb_band_matrix[:,:,[0]],axis=1) + np.sum(urllc_band_matrix[:,:,[0]],axis=1)
-        RAT_4G = np.sum(embb_band_matrix[:,:,[1]],axis=1) + np.sum(urllc_band_matrix[:,:,[1]],axis=1)
 
-
-        
-        # 采用可行性法则处理约束
-        CV = np.hstack(
-            [
-              RAT_5G - self.W_5g,
-              RAT_4G - self.W_4g,
-            ])
-        
-        
-        
-        pha = CV
-        pha = np.where(CV < 0, 0, CV)
-
-        CV_pha = np.sum(pha,axis=1)   # NIND x 1
 
         # Read the CSV files
-        urllc_df = pd.read_csv("urllc_tasks_{}.csv".format(self.URLLC_num))
-        embb_df = pd.read_csv("embb_tasks_{}.csv".format(self.eMBB_num))
-        
+        urllc_df = pd.read_csv("Data/urllc_tasks_{}.csv".format(self.URLLC_num))
+        embb_df = pd.read_csv("Data/embb_tasks_{}.csv".format(self.eMBB_num))
+
 
         urllc_data = urllc_df['Data Size (bits)'].to_numpy() 
         urllc_data = urllc_data.reshape(-1,1)
@@ -320,6 +305,169 @@ class MyproblemInner:
 
         deadline_embb = embb_df['Deadline (s)'].to_numpy()
         deadline_embb = np.tile(deadline_embb, (Vars.shape[0], 1))   # 拉伸
+
+
+
+
+
+        # *************** downlink ***************
+
+        # URLLC 是 用全部URLLC download 带宽和power进行传输 ，但是需要进行scheduling，因为可能会有多个URLLC任务到达，到达时间不同
+        
+        # ========== 步骤1: 计算URLLC下行传输速率 ==========
+        # URLLC下行传输分为两种情况：
+        # 1. Terrestrial BSs (6G和Wi-Fi): 使用有线回传，下行速率 = C_m (回传容量)
+        # 2. Satellite BSs: 使用无线链路，下行速率 = B_m^{down,u} * log2(1 + L_m^{down,u} * |h_{sat->gw}|^2 / (B_m^{down,u} * N0))
+        
+        # 首先，需要识别每个URLLC任务关联到哪些RAT（通过上行关联判断）
+        # urllc_band_matrix_up: NIND x URLLC_num x RAT_num_up
+        # RAT索引：0,1=6G; 2,3=WiFi; 4,5=Satellite上行
+        
+        # 初始化下行速率矩阵（每个任务一个速率值）
+        rk_m_urllc_down_sum = np.zeros((NIND, self.URLLC_num))
+        
+        # 提取卫星到gateway的信道（在channel矩阵的后M3列，对所有用户都相同）
+        # channel矩阵结构: (num_users, RAT_num + M3)
+        # 前RAT_num列：用户到各RAT的信道
+        # 后M3列：卫星到gateway的信道（对所有用户都相同，因为gateway位置固定）
+        M3 = self.RAT_list[2]  # 卫星BS数量
+        sat_to_gateway_channel = channel[:, self.RAT_num_cure:self.RAT_num]  # (num_users, M3)
+        # 由于对所有用户都相同，取第一行即可
+        sat_to_gateway_channel = sat_to_gateway_channel[0, :]  # (M3,)
+        # 扩展为 (NIND, URLLC_num, M3) 的形状
+        sat_to_gateway_h = np.tile(sat_to_gateway_channel, (NIND, self.URLLC_num, 1))  # (NIND, URLLC_num, M3)
+        
+        # 向量化处理：对于每个URLLC任务，判断其关联的RAT类型并计算下行速率
+        # 分离terrestrial和satellite的关联
+        terrestrial_band = urllc_band_matrix_up[:, :, :self.RAT_num_terrestrial]  # NIND x URLLC_num x 4 (6G和WiFi)
+        satellite_up_band = urllc_band_matrix_up[:, :, self.RAT_num_terrestrial:]  # NIND x URLLC_num x 2 (卫星上行)
+        
+        # 检查每个任务是否关联到terrestrial RATs
+        terrestrial_mask = np.any(terrestrial_band > eps, axis=2)  # NIND x URLLC_num
+        # 检查每个任务是否关联到satellite RATs
+        satellite_mask = np.any(satellite_up_band > eps, axis=2)  # NIND x URLLC_num
+        
+        # 对于terrestrial关联的任务，使用有线回传容量
+        # 找到每个任务关联的第一个terrestrial RAT
+        terrestrial_rat_indices = np.argmax(terrestrial_band > eps, axis=2)  # NIND x URLLC_num
+        # 对于没有关联terrestrial的任务，索引可能不正确，需要mask处理
+        terrestrial_rat_indices = np.where(terrestrial_mask, terrestrial_rat_indices, 0)
+        # 获取对应的回传容量
+        C_backhaul_matrix = self.C_vec[terrestrial_rat_indices]  # NIND x URLLC_num
+        # 只对关联terrestrial的任务应用回传容量
+        rk_m_urllc_down_sum = np.where(terrestrial_mask, C_backhaul_matrix, 0)
+        
+        # 对于satellite关联的任务，使用无线链路计算
+        # 找到每个任务关联的第一个satellite RAT（在卫星上行中的索引）
+        satellite_up_indices = np.argmax(satellite_up_band > eps, axis=2)  # NIND x URLLC_num
+        # 对于没有关联satellite的任务，索引可能不正确，需要mask处理
+        satellite_up_indices = np.where(satellite_mask, satellite_up_indices, 0)
+        
+        # 获取该卫星BS的URLLC下行带宽和功率
+        B_down_u = self.W_sat_URLLC_down  # 全部URLLC下行带宽
+        L_down_u = self.L_sat_URLLC_down  # 全部URLLC下行功率
+        denominator_down = (N0 * B_down_u) + eps
+        
+        # 使用卫星到gateway的信道计算下行速率
+        # 需要根据satellite_up_indices选择对应的卫星到gateway信道
+        # 创建索引数组来选择正确的卫星信道
+        i_indices = np.arange(NIND)[:, np.newaxis]  # NIND x 1
+        k_indices = np.arange(self.URLLC_num)[np.newaxis, :]  # 1 x URLLC_num
+        sat_indices = np.clip(satellite_up_indices, 0, M3 - 1)  # 确保索引在有效范围内
+        
+        # 选择对应的卫星到gateway信道
+        h_sat_gw_selected = sat_to_gateway_h[i_indices, k_indices, sat_indices]  # NIND x URLLC_num
+        
+        # 计算卫星下行速率
+        rk_sat_down = B_down_u * np.log2(1 + (L_down_u * abs(h_sat_gw_selected)**2) / denominator_down)
+        rk_sat_down = np.where(np.isnan(rk_sat_down), 0, rk_sat_down)
+        
+        # 对于关联satellite但不关联terrestrial的任务，使用卫星下行速率
+        # 如果同时关联terrestrial和satellite，优先使用terrestrial（有线回传更稳定）
+        satellite_only_mask = satellite_mask & (~terrestrial_mask)
+        rk_m_urllc_down_sum = np.where(satellite_only_mask, rk_sat_down, rk_m_urllc_down_sum)
+        
+        # ========== 步骤2: 确定任务到达时间 ==========
+        # 到达时间 = 上行传输完成时间（计算在gateway，所以到达时间就是上行传输完成时间）
+        arrival_time_urllc_downlink = transmission_time_urllc  # NIND x URLLC_num
+        
+        # ========== 步骤3: 实现下行FIFO调度 ==========
+        # 对每个个体（NIND），按到达时间对URLLC任务进行排序，然后依次传输
+        # 每个任务使用全部下行带宽和功率，所以需要串行传输
+        
+        # 定义最大延迟（用于处理失败情况）
+        max_delay_urllc = 2  # 与后面的定义保持一致
+        
+        downlink_transmission_time_urllc = np.zeros((NIND, self.URLLC_num))
+        downlink_queue_delay_urllc = np.zeros((NIND, self.URLLC_num))
+        
+        for i in range(NIND):
+            # 获取该个体的任务信息
+            arrival_times = arrival_time_urllc_downlink[i, :]  # URLLC_num
+            downlink_rates = rk_m_urllc_down_sum[i, :]  # URLLC_num
+            data_sizes = urllc_data[i, :, 0]  # URLLC_num
+            
+            # 创建任务索引列表，按到达时间排序
+            task_indices = np.argsort(arrival_times)
+            
+            # FIFO调度：按到达时间顺序依次传输
+            current_time = 0.0  # 当前时间
+            
+            for idx in task_indices:
+                arrival_time = arrival_times[idx]
+                data_size = data_sizes[idx]
+                downlink_rate = downlink_rates[idx]
+                
+                # 如果任务没有关联卫星BS（下行速率为0），跳过或标记为失败
+                if downlink_rate < eps:
+                    downlink_transmission_time_urllc[i, idx] = max_delay_urllc
+                    downlink_queue_delay_urllc[i, idx] = max_delay_urllc
+                    continue
+                
+                # 计算下行传输时间
+                transmission_time = data_size / (downlink_rate + eps)
+                
+                # 计算队列延迟（等待时间）
+                # 如果当前时间 < 到达时间，任务到达后立即传输（无队列延迟）
+                # 如果当前时间 >= 到达时间，任务需要等待（队列延迟 = current_time - arrival_time）
+                if current_time < arrival_time:
+                    queue_delay = 0.0
+                    current_time = arrival_time + transmission_time
+                else:
+                    queue_delay = current_time - arrival_time
+                    current_time = current_time + transmission_time
+                
+                downlink_transmission_time_urllc[i, idx] = transmission_time
+                downlink_queue_delay_urllc[i, idx] = queue_delay
+        
+        # 第二阶段，second-hop 传输完成
+
+
+
+      #该做embb下行传输速率计算
+
+
+
+                
+        # 带宽约束项 check
+        RAT_5G = np.sum(embb_band_matrix_up[:,:,[0]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[0]],axis=1)
+        RAT_4G = np.sum(embb_band_matrix_up[:,:,[1]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[1]],axis=1)
+
+
+        
+        # 采用可行性法则处理约束
+        CV = np.hstack(
+            [
+              RAT_5G - self.W_5g,
+              RAT_4G - self.W_4g,
+            ])
+        
+        
+        
+        pha = CV
+        pha = np.where(CV < 0, 0, CV)
+
+        CV_pha = np.sum(pha,axis=1)   # NIND x 1
 
         # ------------------------------------------------------------------------------------------------------------
         max_delay_urllc = 2

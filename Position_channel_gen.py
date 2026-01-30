@@ -42,6 +42,7 @@ class RATDistanceCalculator:
         # 建议：先用 Ku 波段（14 GHz），路径损耗是 2 GHz 的 49 倍，比 Ka 波段的 225 倍更容易补偿
         # 如果需要 Ka 波段，可以改为 30e9
         self.f_up_sat = np.full(self.M3, 14e9, dtype=float)   # [Hz] Ku 波段上行 14 GHz
+        self.f_down_sat = np.full(self.M3, 12e9, dtype=float)  # [Hz] Ku 波段下行 12 GHz
         # 天线增益（线性值）- Ku/Ka 波段需要更大的天线增益来补偿更高的路径损耗：
         # 频率从 2 GHz 增加到 14 GHz（Ku 波段），FSPL 增加 (14/2)² = 49 倍
         # 虽然频率降低了，但 Ku 波段仍然需要很大的增益来补偿路径损耗
@@ -69,14 +70,15 @@ class RATDistanceCalculator:
             dtype=float,
         )
 
-        # 默认给卫星放两个不同的投影位置（高度 550 km）
+        # 默认给卫星放两个不同的投影位置（高度不同，确保到gateway的距离有明显差异）
         # - 若 M3=1，只取第一颗
         # - 若 M3>2，可继续按需扩展这个列表或改成规则生成
-        sat_height = 550000.0
+        sat_height_1 = 550000.0  # SAT1高度 550 km
+        sat_height_2 = 600000.0  # SAT2高度 600 km（不同高度，确保距离差异明显）
         sat_positions_pool = np.array(
             [
-                [-300.0, 0.0, sat_height],        # SAT 1
-                [300.0, 0.0, sat_height],   # SAT 2（与 SAT1 拉开水平距离）
+                [-500.0, 300.0, sat_height_1],        # SAT 1（较大的水平距离，高度550km）
+                [400.0, -200.0, sat_height_2],   # SAT 2（不同的水平位置和高度600km，确保距离差异明显）
             ],
             dtype=float,
         )
@@ -289,10 +291,12 @@ class RATDistanceCalculator:
                 d_gw = np.linalg.norm(sat_pos - gateway_pos)
                 d_gw_list.append(d_gw)
 
-                # 采用与上行相同的卫星链路物理模型来计算信道增益
-                f_up = self.f_up_sat[s] if s < self.f_up_sat.shape[0] else self.f_up_sat[-1]
-                A_trans = self.g_sat[s] if s < self.g_sat.shape[0] else self.g_sat[-1]
-                A_rec = self.G_sat[s] if s < self.G_sat.shape[0] else self.G_sat[-1]
+                # 卫星到gateway下行链路：使用下行频率和正确的天线增益
+                # 发射端：卫星（使用卫星发射天线增益 G_sat）
+                # 接收端：gateway（使用gateway接收天线增益 g_sat，或可以单独定义gateway天线增益）
+                f_down = self.f_down_sat[s] if s < self.f_down_sat.shape[0] else self.f_down_sat[-1]
+                A_trans = self.G_sat[s] if s < self.G_sat.shape[0] else self.G_sat[-1]  # 卫星发射天线增益
+                A_rec = self.g_sat[s] if s < self.g_sat.shape[0] else self.g_sat[-1]    # Gateway接收天线增益（或可单独定义）
 
                 # 仰角计算：把 gateway 看成“用户”，位置固定
                 delta_h = sat_pos[2] - gateway_pos[2]
@@ -315,8 +319,9 @@ class RATDistanceCalculator:
 
                 C = self.c_light
                 L_gw = d_gw
-                F_Hz = f_up
+                F_Hz = f_down  # 使用下行频率
                 fspl_factor_gw = (C / (4.0 * np.pi * L_gw * F_Hz + eps)) ** 2
+                # 注意：卫星到gateway是确定性链路（无小尺度衰落），所以只计算大尺度信道增益
                 ch_mag_gw = A_trans * A_rec * Gamma_gw * fspl_factor_gw
 
                 ch_gw_list.append(ch_mag_gw)
