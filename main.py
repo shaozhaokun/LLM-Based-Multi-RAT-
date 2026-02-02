@@ -52,6 +52,8 @@ class MyproblemInner:
         
         # URLLC下行功率 (每个卫星BS的URLLC下行传输功率，单位：W)
         self.L_sat_URLLC_down = 100.0  # 1 W，可根据实际模型调整    
+        # eMBB 下行总功率（每颗卫星的总功率预算，单位：W）
+        self.L_sat_eMBB_down_total = 20.0
 
         # 根据 RAT 索引设置回传容量 C_vec（单位：bit/s）
         # RAT 0, 1: 6G BSs (M1)
@@ -74,6 +76,18 @@ class MyproblemInner:
 
         self.lb =     np.array( lb_band_eMBB + lb_band_URLLC).reshape(1,self.chromosome_length)
         self.ub =    np.array(ub_band_eMBB + ub_band_URLLC ).reshape(1,self.chromosome_length)  # 1 X D
+        
+        # 预加载任务数据
+        urllc_df = pd.read_csv("Data/urllc_tasks_{}.csv".format(self.URLLC_num))
+        embb_df = pd.read_csv("Data/embb_tasks_{}.csv".format(self.eMBB_num))
+        
+        # 存储为实例变量，供evalVars使用
+        self.urllc_data_size = urllc_df['Data Size (bits)'].to_numpy()  # (URLLC_num,)
+        self.embb_data_size = embb_df['Data Size (bits)'].to_numpy()    # (eMBB_num,)
+        self.urllc_cpu_cycles = urllc_df['CPU Cycles'].to_numpy()       # (URLLC_num,)
+        self.embb_cpu_cycles = embb_df['CPU Cycles'].to_numpy()         # (eMBB_num,)
+        self.urllc_deadline = urllc_df['Deadline (s)'].to_numpy()        # (URLLC_num,)
+        self.embb_deadline = embb_df['Deadline (s)'].to_numpy()         # (eMBB_num,)
 
     
     def initialize_population_origin(self):
@@ -258,53 +272,86 @@ class MyproblemInner:
                                                        
 
 
-        # Read the CSV files
-        urllc_df = pd.read_csv("Data/urllc_tasks_{}.csv".format(self.URLLC_num))
-        embb_df = pd.read_csv("Data/embb_tasks_{}.csv".format(self.eMBB_num))
+        # 使用预加载的任务数据（已在__init__中读取）
+        urllc_data = self.urllc_data_size.reshape(-1,1)
+        urllc_data = np.tile(urllc_data,(NIND,1,1)) #(NIND,URLLC_num,1)
 
-
-        urllc_data = urllc_df['Data Size (bits)'].to_numpy() 
-        urllc_data = urllc_data.reshape(-1,1)
-        urllc_data = np.tile(urllc_data,(NIND,1,1)) #(NIND,self.embb_num,1)
-
-        embb_data = embb_df['Data Size (bits)'].to_numpy()
-        embb_data = embb_data.reshape(-1,1)
-        embb_data = np.tile(embb_data,(NIND,1,1)) #(NIND,self.embb_num,1)
+        embb_data = self.embb_data_size.reshape(-1,1)
+        embb_data = np.tile(embb_data,(NIND,1,1)) #(NIND,eMBB_num,1)
 
  
 
-        # 计算URLLC的传输时间
+        # 计算URLLC的传输时间（单跳等效）
         transmission_time_urllc = urllc_data/(rk_m_urllc_sum+eps)          # (NIND,self.urllc_num,1)
         transmission_time_urllc = transmission_time_urllc.reshape(NIND,-1) # (NIND,self.urllc_num)
 
-        # # 计算eMBB的传输时间, multi-rat 传输 拉格朗日乘子法
-        transmission_time_embb =  embb_data / np.sum(rk_m_embb,axis=2,keepdims=True)   # NIND x embb_num x 1
+        # ========= 计算 eMBB 的两跳有效速率 R_{k,m}^{[e2e]} 并得到传输时间 =========
+        # 第一跳速率：rk_m_embb 已经计算好 (NIND, eMBB_num, RAT_num_up)
+        # 第二跳速率：
+        # - terrestrial 路径：由回传容量 C_vec 决定（固定）
+        # - satellite 路径：在每颗卫星的总功率约束下，对接入该卫星的 eMBB 用户做功率分配，再计算下行 data rate
+
+        # 提取卫星->gateway 下行信道（在 Position_channel_gen 中已追加到 channel 的最后 M3 列）
+        M3 = self.RAT_num_sat  # 卫星数量
+        sat_to_gateway_channel_full = channel[:, self.RAT_num_cure:self.RAT_num_cure + M3]  # (num_users, M3)
+        # 卫星->gateway 信道只与卫星和gateway位置有关，与用户无关；每一行相同，取第一行为 (M3,)
+        sat_to_gateway_channel = sat_to_gateway_channel_full[0, :]  # (M3,)
+        sat_to_gateway_gain2 = np.abs(sat_to_gateway_channel) ** 2  # |h_{sat->gw}|^2
+
+        # 构造第二跳速率矩阵（与 rk_m_embb 同形状）
+        C_vec_up = self.C_vec[:self.RAT_num_up]  # 对应上行 RAT 的回传容量，形状 (RAT_num_up,)
+        r_second_embb = np.zeros_like(rk_m_embb)
+        
+
+        for m_idx in range(self.RAT_num_up):
+            C_m = C_vec_up[m_idx]
+            # terrestrial 上行 RAT：第二跳为有线回传，速率固定为 C_m
+            if np.isfinite(C_m):
+                r_second_embb[:, :, m_idx] = C_m
+            else:
+                # satellite 上行 RAT：索引从 self.RAT_num_terrestrial 开始
+                sat_idx = m_idx - self.RAT_num_terrestrial  # 对应的卫星索引 0..M3-1
+                if sat_idx < 0 or sat_idx >= M3:
+                    continue
+
+                h2_sat_gw = sat_to_gateway_gain2[sat_idx]  # 该卫星的 |h_{sat->gw}|^2，标量
+                # 对应卫星下行的带宽分配：NIND x eMBB_num
+                B_down_mat = embb_band_matrix_down[:, :, sat_idx]  # (NIND, eMBB_num)
+
+                # 每个个体样本 i 在该卫星上的总带宽：shape (NIND, 1)
+                sum_B = np.sum(B_down_mat, axis=1, keepdims=True)
+
+                # 等功率谱密度下的 SNR（对该卫星的所有用户相同）：shape (NIND, 1)
+                snr_const = (self.L_sat_eMBB_down_total * h2_sat_gw) / (sum_B * N0 + eps)
+                # 没有任何用户使用该卫星时（sum_B=0），SNR 置为 0
+                snr_const = np.where(sum_B > eps, snr_const, 0.0)
+
+                # 下行速率：B_k * log2(1 + SNR_const)，广播到 (NIND, eMBB_num)
+                r_second_embb[:, :, m_idx] = B_down_mat * np.log2(1.0 + snr_const)
+
+        # 两跳有效速率 R_{k,m}^{[e2e]} = min(r^{(1)}, r^{(2)})
+        R_e2e_embb = np.minimum(rk_m_embb, r_second_embb)
+
+        # 基于 Lemma 1：对于给定的 {R_{k,m}^{[e2e]}}, eMBB 的最优传输时间为
+        #   τ_k = α_k / Σ_m R_{k,m}^{[e2e]}
+        # 代码层面：直接用 Σ_m R_{k,m}^{[e2e]} 替换原来的一跳 Σ_m r_{k,m}
+        R_e2e_sum = np.sum(R_e2e_embb, axis=2, keepdims=True)  # NIND x eMBB_num x 1
+        transmission_time_embb = embb_data / (R_e2e_sum + eps)   # NIND x eMBB_num x 1
         transmission_time_embb = transmission_time_embb.reshape(NIND,-1)               # NIND x embb_num
 
 
        
         # 计算每个任务的计算时间（ms）
-                # 原始数据
-        cpu_cycles_urllc = urllc_df['CPU Cycles'].to_numpy()  # (30,)
-                # 扩展cpu_cycles_urllc到(NIND, self.urllc_num )维度
-        cpu_cycles_urllc_expanded = np.tile(cpu_cycles_urllc, (Vars.shape[0], 1))  # Vars.shape[0] 应该是100
-                # 计算每个任务的计算时间（ms）
-        computation_time_urllc = cpu_cycles_urllc_expanded / cpu_rate_urllc  # (100, 30)
-    
+        # 使用预加载的数据
+        cpu_cycles_urllc_expanded = np.tile(self.urllc_cpu_cycles, (Vars.shape[0], 1))  # (NIND, URLLC_num)
+        computation_time_urllc = cpu_cycles_urllc_expanded / cpu_rate_urllc  # (NIND, URLLC_num)
 
+        cpu_cycles_embb_expanded = np.tile(self.embb_cpu_cycles, (Vars.shape[0], 1))  # (NIND, eMBB_num)
+        computation_time_embb = cpu_cycles_embb_expanded / cpu_rate_embb  # (NIND, eMBB_num)
 
-        cpu_cycles_embb = embb_df['CPU Cycles'].to_numpy()  # (30,)
-        cpu_cycles_embb_expanded = np.tile(cpu_cycles_embb, (Vars.shape[0], 1))  # Vars.shape[0] 应该是100
-        computation_time_embb = cpu_cycles_embb_expanded / cpu_rate_embb  # (100, 30)
-
-
-        # urllc 的 deadline时间
-        deadline_urllc = urllc_df['Deadline (s)'].to_numpy()
-        deadline_urllc = np.tile(deadline_urllc, (Vars.shape[0], 1))   # 拉伸
-
-
-        deadline_embb = embb_df['Deadline (s)'].to_numpy()
-        deadline_embb = np.tile(deadline_embb, (Vars.shape[0], 1))   # 拉伸
+        # URLLC 和 eMBB 的 deadline 时间
+        deadline_urllc = np.tile(self.urllc_deadline, (Vars.shape[0], 1))   # (NIND, URLLC_num)
+        deadline_embb = np.tile(self.embb_deadline, (Vars.shape[0], 1))   # (NIND, eMBB_num)
 
 
 
@@ -440,7 +487,9 @@ class MyproblemInner:
                 downlink_transmission_time_urllc[i, idx] = transmission_time
                 downlink_queue_delay_urllc[i, idx] = queue_delay
         
-        # 第二阶段，second-hop 传输完成
+        # URLLC端到端总延迟 = 上行传输时间 + 下行队列延迟 + 下行传输时间
+        # 注意：计算在gateway，所以没有单独的计算时间
+        total_delay_urllc_e2e = transmission_time_urllc + downlink_queue_delay_urllc + downlink_transmission_time_urllc
 
 
 
@@ -659,7 +708,7 @@ if __name__=="__main__":
                      [0,0,0,0,1,0],[0,0,0,0,1,0],[0,0,0,0,0,1],[0,0,0,0,0,1],     # k2_u
                      [0,1,0,0,0,0],[0,0,1,0,0,0],[0,1,0,0,0,0],[0,0,0,1,0,0],     # k3_u
                      [1,0,1,0,0,0],[1,0,0,1,0,0],[1,0,1,0,0,0],[0,1,0,1,0,0],     # k1_e
-                     [0,0,0,0,1,1],[0,0,0,0,1,1],[0,0,0,0,1,1],[0,0,0,0,1,1],     # k2_e
+                     [0,0,0,0,1,0],[0,0,0,0,0,1],[0,0,0,0,0,1],[0,0,0,0,1,0],     # k2_e
                      [0,1,0,1,1,0],[1,0,1,0,1,0],[1,0,1,0,0,1],[0,1,1,0,1,0]])     # k3_e
     
 
