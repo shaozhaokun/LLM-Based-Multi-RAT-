@@ -1,6 +1,9 @@
 import numpy as np
 
 
+BW_EPS_HZ = 1.0  # 带宽阈值：小于该值的带宽按 0 处理，避免数值噪声导致 C/W 溢出
+
+
 def _water_filling_no_cap(W_row, h_row, N0, P_k):
     """
     对给定的一组通道做「不带上限 P_c」的经典 water-filling，使用闭式解（论文 Equation 30）。
@@ -19,7 +22,7 @@ def _water_filling_no_cap(W_row, h_row, N0, P_k):
         return np.zeros_like(W_row, dtype=float)
 
     # 初始：所有通道都参与
-    active_mask = (W_row > 0) & (abs_h2 > 0)
+    active_mask = (W_row > BW_EPS_HZ) & (abs_h2 > 0)
     p_result = np.zeros_like(W_row, dtype=float)
 
     # 迭代：逐步排除 p_m < 0 的通道
@@ -87,7 +90,7 @@ def _capped_water_filling_single_user(W_row, h_row, N0, P_k, C_vec):
     # => P_m^c = (W_m * N0 / |h_m|^2) * (2^{C_m / W_m} - 1)
     P_c = np.zeros_like(W_row, dtype=float)
     for m in range(RAT_num):
-        if W_row[m] > 0 and abs_h2[m] > 0 and C_vec is not None:
+        if W_row[m] > BW_EPS_HZ and abs_h2[m] > 0 and C_vec is not None:
             C_m = C_vec[m]
             # 如果该 RAT 没有回传约束（例如 C_m 为 inf 或 nan），视为无截断
             if np.isinf(C_m) or np.isnan(C_m):
@@ -108,7 +111,7 @@ def _capped_water_filling_single_user(W_row, h_row, N0, P_k, C_vec):
     #       然后在剩余通道上对剩余功率继续 water-filling，直到无通道超过 P_c。
     p_final = np.zeros_like(W_row, dtype=float)
     remaining_power = P_k
-    active_mask = (W_row > 0)  # 当前参与 water-filling 的通道
+    active_mask = (W_row > BW_EPS_HZ)  # 当前参与 water-filling 的通道
 
     # 如果存在 P_c = 0 的通道，直接保持为 0
     for _ in range(RAT_num):  # 最多迭代 RAT_num 次就会收敛
@@ -252,7 +255,9 @@ def satellite_downlink_power_allocation(
     # 对每个样本、每颗卫星：把“用户”当成 water-filling 的“通道”
     for i in range(NIND):
         for s in range(M3):
-            B_row = embb_band_matrix_down[i, :, s]  # (eMBB_num,)
+            B_row = embb_band_matrix_down[i, :, s].copy()  # (eMBB_num,)
+            # 将数值噪声的“极小带宽”直接置零，避免 cap/W 溢出与不稳定
+            B_row[B_row <= BW_EPS_HZ] = 0.0
             if np.all(B_row <= 0) or P_sat_total <= 0:
                 continue
 

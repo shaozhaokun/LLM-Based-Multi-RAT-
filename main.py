@@ -249,24 +249,45 @@ class MyproblemInner:
         )
 
         eps = 1e-10
-        denominator_urllc = ( N0 * urllc_band_matrix_up) + eps
-        rk_m_urllc_ = urllc_band_matrix_up * np.log2(1 + (abs(URLLC_h_up)**2 * 0.2) / denominator_urllc)  # NIND x embb_num x rat num
-        rk_m_urllc = np.where(np.isnan(rk_m_urllc_), 0, rk_m_urllc_)  # 把nan值变成0
+
+        # URLLC uplink：不要用 (N0*W + eps) 平滑分母（会扭曲极小带宽的结果）
+        # 只在 W>0 的位置计算速率，W=0 的链路速率为 0
+        denom_urllc = N0 * urllc_band_matrix_up
+        mask_urllc = urllc_band_matrix_up > 0
+
+        snr_urllc = np.zeros_like(denom_urllc, dtype=float)
+        np.divide(
+            (np.abs(URLLC_h_up) ** 2) * 0.2,
+            denom_urllc,
+            out=snr_urllc,
+            where=mask_urllc,
+        )
+        rk_m_urllc = np.zeros_like(urllc_band_matrix_up, dtype=float)
+        rk_m_urllc[mask_urllc] = urllc_band_matrix_up[mask_urllc] * np.log2(1.0 + snr_urllc[mask_urllc])
         rk_m_urllc_sum = np.sum(rk_m_urllc,axis=2,keepdims=1) # (NIND,1,1)
 
 
-        denominator_embb = ( N0 * embb_band_matrix_up) + eps
-        rk_m_embb_ = embb_band_matrix_up  * np.log2(1 + (abs(eMBB_h_up)**2 * embb_power_matrix_up) / denominator_embb)
+        denom_embb = N0 * embb_band_matrix_up
+        mask_embb = embb_band_matrix_up > 0
 
-        rk_m_embb = np.where(np.isnan(rk_m_embb_), 0, rk_m_embb_)  # 把nan值变成0
+        snr_embb = np.zeros_like(denom_embb, dtype=float)
+        np.divide(
+            (np.abs(eMBB_h_up) ** 2) * embb_power_matrix_up,
+            denom_embb,
+            out=snr_embb,
+            where=mask_embb,
+        )
+        rk_m_embb = np.zeros_like(embb_band_matrix_up, dtype=float)
+        rk_m_embb[mask_embb] = embb_band_matrix_up[mask_embb] * np.log2(1.0 + snr_embb[mask_embb])
 
         # SE check
-        SE_urllc_ = np.sum(np.log2(1 + (abs(URLLC_h_up)**2 * 0.2) / denominator_urllc)*binary_matrix_urllc_up,axis=2)
-        SE_urllc_test = np.mean(np.log2(1 + (abs(URLLC_h_up)**2 * 0.2) / denominator_urllc)*binary_matrix_urllc_up,axis=1)
+        # SE check（仅用于统计，不参与优化）：与上面一致，只在 W>0 的位置有效
+        SE_urllc_ = np.sum(np.log2(1.0 + snr_urllc) * binary_matrix_urllc_up, axis=2)
+        SE_urllc_test = np.mean(np.log2(1.0 + snr_urllc) * binary_matrix_urllc_up, axis=1)
         SE_urllc = np.mean(SE_urllc_,axis=1)
 
-        SE_eMBB_ = np.sum(np.log2(1 + (abs(eMBB_h_up)**2 * embb_power_matrix_up) / denominator_embb)*binary_matrix_embb_up,axis=2)
-        SE_eMBB_test = np.mean(np.log2(1 + (abs(eMBB_h_up)**2 * embb_power_matrix_up) / denominator_embb)*binary_matrix_embb_up,axis=1)
+        SE_eMBB_ = np.sum(np.log2(1.0 + snr_embb) * binary_matrix_embb_up, axis=2)
+        SE_eMBB_test = np.mean(np.log2(1.0 + snr_embb) * binary_matrix_embb_up, axis=1)
         SE_eMBB = np.mean(SE_eMBB_,axis=1)
 
                                                        
@@ -370,7 +391,7 @@ class MyproblemInner:
 
         # *************** downlink ***************
 
-        # URLLC 是 用全部URLLC download 带宽和power进行传输 ，但是需要进行scheduling，因为可能会有多个URLLC任务到达，到达时间不同
+        # URLLC 是 用全部 URLLC download 带宽和power进行传输 ，但是需要进行scheduling，因为可能会有多个URLLC任务到达，到达时间不同
         
         # ========== 步骤1: 计算URLLC下行传输速率 ==========
         # URLLC下行传输分为两种情况：
