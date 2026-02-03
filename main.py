@@ -4,7 +4,7 @@ import pandas as pd
 from Scheduling import queue_delay_calculation
 
 from Position_channel_gen import RATDistanceCalculator
-from WF import water_filling_power_allocation
+from WF import water_filling_power_allocation, satellite_downlink_power_allocation
 
 
 
@@ -301,37 +301,48 @@ class MyproblemInner:
         # 构造第二跳速率矩阵（与 rk_m_embb 同形状）
         C_vec_up = self.C_vec[:self.RAT_num_up]  # 对应上行 RAT 的回传容量，形状 (RAT_num_up,)
         r_second_embb = np.zeros_like(rk_m_embb)
+
+        r_second_embb[:,:,:self.RAT_num_terrestrial] = C_vec_up[:self.RAT_num_terrestrial]
+
+        # ========= satellite 第二跳：每颗卫星在“接入该卫星的用户之间”做 capped water-filling =========
+        # cap 取第一跳速率（希望第一跳为瓶颈）：C_sat_down 形状 (NIND, eMBB_num, M3)
+        C_sat_down = rk_m_embb[:, :, self.RAT_num_terrestrial:]
+
+        # 1) 功率分配：输出 (NIND, eMBB_num, M3)，每颗卫星总功率预算为 self.L_sat_eMBB_down_total
+        embb_sat_power_matrix_down = satellite_downlink_power_allocation(
+            embb_band_matrix_down=embb_band_matrix_down,
+            sat_to_gateway_h=sat_to_gateway_channel,
+            N0=N0,
+            P_sat_total=self.L_sat_eMBB_down_total,
+            cap_rate_matrix=C_sat_down,
+        )
+
+        # 2) 用功率 + 信道 计算第二跳速率 r^{(2)}：
+        #    r = B * log2(1 + P * |h|^2 / (B*N0))
+        h2_sat = sat_to_gateway_gain2.reshape(1, 1, M3)  # (1,1,M3) 便于广播
+
+        # 关键：B=0 时该链路不传输，速率应为 0；不要用 (B*N0 + eps) 这种方式“平滑”分母，否则会显著扭曲结果。
+        denom_sat = N0 * embb_band_matrix_down  # (NIND,eMBB_num,M3)
+        mask_sat = embb_band_matrix_down > 0    # 只在 B>0 的位置计算 SNR/速率
+
+        # 用 where=mask 的安全除法，避免对 h2_sat 做布尔索引导致维度不匹配
+        r_second_embb_sat_snr = np.zeros_like(denom_sat, dtype=float)
+        np.divide(
+            embb_sat_power_matrix_down * h2_sat,
+            denom_sat,
+            out=r_second_embb_sat_snr,
+            where=mask_sat,
+        )
+
+        r_second_embb_sat = np.zeros_like(embb_band_matrix_down, dtype=float)
+        r_second_embb_sat[mask_sat] = embb_band_matrix_down[mask_sat] * np.log2(1.0 + r_second_embb_sat_snr[mask_sat])
+
+        # 3) 填回 r_second_embb 的卫星两列（对应上行的卫星 RAT 位置）
+        r_second_embb[:, :, self.RAT_num_terrestrial:] = r_second_embb_sat
         
-
-        for m_idx in range(self.RAT_num_up):
-            C_m = C_vec_up[m_idx]
-            # terrestrial 上行 RAT：第二跳为有线回传，速率固定为 C_m
-            if np.isfinite(C_m):
-                r_second_embb[:, :, m_idx] = C_m
-            else:
-                # satellite 上行 RAT：索引从 self.RAT_num_terrestrial 开始
-                sat_idx = m_idx - self.RAT_num_terrestrial  # 对应的卫星索引 0..M3-1
-                if sat_idx < 0 or sat_idx >= M3:
-                    continue
-
-                h2_sat_gw = sat_to_gateway_gain2[sat_idx]  # 该卫星的 |h_{sat->gw}|^2，标量
-                # 对应卫星下行的带宽分配：NIND x eMBB_num
-                B_down_mat = embb_band_matrix_down[:, :, sat_idx]  # (NIND, eMBB_num)
-
-                # 每个个体样本 i 在该卫星上的总带宽：shape (NIND, 1)
-                sum_B = np.sum(B_down_mat, axis=1, keepdims=True)
-
-                # 等功率谱密度下的 SNR（对该卫星的所有用户相同）：shape (NIND, 1)
-                snr_const = (self.L_sat_eMBB_down_total * h2_sat_gw) / (sum_B * N0 + eps)
-                # 没有任何用户使用该卫星时（sum_B=0），SNR 置为 0
-                snr_const = np.where(sum_B > eps, snr_const, 0.0)
-
-                # 下行速率：B_k * log2(1 + SNR_const)，广播到 (NIND, eMBB_num)
-                r_second_embb[:, :, m_idx] = B_down_mat * np.log2(1.0 + snr_const)
-
         # 两跳有效速率 R_{k,m}^{[e2e]} = min(r^{(1)}, r^{(2)})
         R_e2e_embb = np.minimum(rk_m_embb, r_second_embb)
-
+    
         # 基于 Lemma 1：对于给定的 {R_{k,m}^{[e2e]}}, eMBB 的最优传输时间为
         #   τ_k = α_k / Σ_m R_{k,m}^{[e2e]}
         # 代码层面：直接用 Σ_m R_{k,m}^{[e2e]} 替换原来的一跳 Σ_m r_{k,m}
@@ -701,8 +712,9 @@ if __name__=="__main__":
 
 
 
+    seed = 42
 
-    seed = np.random.seed(42)
+    # seed = np.random.seed(42)
     # outer= np.ones((k_urllc+k_embb,RAT_num))   # LLM (GPT),association  
     outer = np.array([[1,0,0,0,0,0],[0,1,0,0,0,0],[0,0,1,0,0,0],[0,0,0,1,0,0],     # k1_u
                      [0,0,0,0,1,0],[0,0,0,0,1,0],[0,0,0,0,0,1],[0,0,0,0,0,1],     # k2_u

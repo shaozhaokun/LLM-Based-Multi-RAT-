@@ -214,6 +214,64 @@ def water_filling_power_allocation(embb_band_matrix_up, eMBB_h_up, N0, P_k, C_ve
     return embb_power_matrix
 
 
+def satellite_downlink_power_allocation(
+    embb_band_matrix_down,
+    sat_to_gateway_h,
+    N0,
+    P_sat_total,
+    cap_rate_matrix=None,
+):
+    """
+    卫星第二跳（卫星->gateway）eMBB 下行功率分配：
+    - 每颗卫星有自己的总功率预算 P_sat_total（标量，表示“每颗卫星”相同；如需不同，可传入长度为 M3 的向量并自行扩展）
+    - 在该卫星上，被分配了下行带宽的 eMBB 用户共同分享该卫星的总功率
+    - 支持 capped water-filling：cap_rate_matrix 作为“速率上限”（例如第一跳速率 r^{(1)}），避免第二跳过强造成浪费
+
+    参数:
+        embb_band_matrix_down: np.ndarray, (NIND, eMBB_num, M3)，每个用户在每颗卫星上的下行带宽 B_{k,m}^{down,e}
+        sat_to_gateway_h:      np.ndarray, (M3,)，每颗卫星到 gateway 的复信道（对用户无关，但对卫星不同）
+        N0:                    float, 噪声功率谱密度
+        P_sat_total:           float, 每颗卫星的 eMBB 下行总功率预算（W）
+        cap_rate_matrix:       np.ndarray, (NIND, eMBB_num, M3)，速率上限（bps）。若为 None，则不加 cap
+
+    返回:
+        power_down: np.ndarray, (NIND, eMBB_num, M3)，每个用户在每颗卫星上的下行功率分配 L_{k,m}^{down,e}
+    """
+    embb_band_matrix_down = np.asarray(embb_band_matrix_down, dtype=float)
+    sat_to_gateway_h = np.asarray(sat_to_gateway_h)
+
+    NIND, eMBB_num, M3 = embb_band_matrix_down.shape
+    assert sat_to_gateway_h.shape[0] == M3, "sat_to_gateway_h 的长度必须等于 M3"
+
+    if cap_rate_matrix is not None:
+        cap_rate_matrix = np.asarray(cap_rate_matrix, dtype=float)
+        assert cap_rate_matrix.shape == (NIND, eMBB_num, M3), "cap_rate_matrix 形状必须是 (NIND, eMBB_num, M3)"
+
+    power_down = np.zeros_like(embb_band_matrix_down, dtype=float)
+
+    # 对每个样本、每颗卫星：把“用户”当成 water-filling 的“通道”
+    for i in range(NIND):
+        for s in range(M3):
+            B_row = embb_band_matrix_down[i, :, s]  # (eMBB_num,)
+            if np.all(B_row <= 0) or P_sat_total <= 0:
+                continue
+
+            # 卫星->gateway 信道对所有用户相同：构造长度为 eMBB_num 的 h_row
+            h_row = np.full((eMBB_num,), sat_to_gateway_h[s], dtype=complex)
+
+            if cap_rate_matrix is None:
+                # 无 cap：退化为普通 WF
+                p_row = _water_filling_no_cap(B_row, h_row, N0, P_sat_total)
+            else:
+                C_row = cap_rate_matrix[i, :, s]
+                # 有 cap：调用“单用户多通道”的 capped WF，把用户当通道即可
+                p_row = _capped_water_filling_single_user(B_row, h_row, N0, P_sat_total, C_row)
+
+            power_down[i, :, s] = p_row
+
+    return power_down
+
+
 if __name__ == "__main__":
     """
     简单 main 测试：
