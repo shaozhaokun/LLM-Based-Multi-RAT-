@@ -23,7 +23,7 @@ class MyproblemInner:
         self.outer_ass_ = outer_ass  #  (,D) 
         self.ch = ch   # channel ((eMBB+URLLC),RAT_num)
         self.population_size = 10  # inner individual
-        self.generation = 100        # inner generation
+        self.generation = 1000        # inner generation
         self.embb = eMBB_num * RAT_num
         self.num_list = num_list   # [k1_u,k2_u,k3_u,k1_e,k2_e,k3_e]
         self.RAT_list = RAT_list   # [6G_BSs_num,Wi-Fi_BSs_num,Satellite_BSs_num]
@@ -185,6 +185,11 @@ class MyproblemInner:
 
     def evalVars(self, X):
 
+        # 1. 计算URLLC上行速率
+        # 2. 计算eMBB上行速率
+        # 3. 计算eMBB的下行速率和communicaiton time
+        # 4. 计算URLLC的下行速率和communicaiton time
+
         Vars = X  # 获取决策变量矩阵
         NIND = Vars.shape[0]
         
@@ -219,6 +224,14 @@ class MyproblemInner:
         N0 = 10 ** (noise_spectral_density_dbm_hz / 10) * 1e-3
         P_k = 0.2 # wt
 
+        
+        # # 使用预加载的任务数据（已在__init__中读取）
+        urllc_data = self.urllc_data_size.reshape(-1,1)
+        urllc_data = np.tile(urllc_data,(NIND,1,1)) #(NIND,URLLC_num,1)
+
+        embb_data = self.embb_data_size.reshape(-1,1)
+        embb_data = np.tile(embb_data,(NIND,1,1)) #(NIND,eMBB_num,1)
+
         channel = self.ch
         channel_up = channel[:,:self.RAT_num_up]
         channel_down = channel[:,self.RAT_num_up:]
@@ -238,6 +251,7 @@ class MyproblemInner:
 
 
         # *************** uplink ***************
+        # **************上行速率计算 ***************
 
         # 计算 eMBB 功率分配情况（water-filling）在uplink上，提取到独立模块 WF.py
         embb_power_matrix_up = water_filling_power_allocation(
@@ -277,8 +291,8 @@ class MyproblemInner:
             out=snr_embb,
             where=mask_embb,
         )
-        rk_m_embb = np.zeros_like(embb_band_matrix_up, dtype=float)
-        rk_m_embb[mask_embb] = embb_band_matrix_up[mask_embb] * np.log2(1.0 + snr_embb[mask_embb])
+        r_first_embb = np.zeros_like(embb_band_matrix_up, dtype=float)
+        r_first_embb[mask_embb] = embb_band_matrix_up[mask_embb] * np.log2(1.0 + snr_embb[mask_embb])
 
         # SE check
         # SE check（仅用于统计，不参与优化）：与上面一致，只在 W>0 的位置有效
@@ -293,26 +307,16 @@ class MyproblemInner:
                                                        
 
 
-        # 使用预加载的任务数据（已在__init__中读取）
-        urllc_data = self.urllc_data_size.reshape(-1,1)
-        urllc_data = np.tile(urllc_data,(NIND,1,1)) #(NIND,URLLC_num,1)
-
-        embb_data = self.embb_data_size.reshape(-1,1)
-        embb_data = np.tile(embb_data,(NIND,1,1)) #(NIND,eMBB_num,1)
 
  
 
-        # 计算URLLC的传输时间（单跳等效）
-        transmission_time_urllc = urllc_data/(rk_m_urllc_sum+eps)          # (NIND,self.urllc_num,1)
-        transmission_time_urllc = transmission_time_urllc.reshape(NIND,-1) # (NIND,self.urllc_num)
 
-        # ========= 计算 eMBB 的两跳有效速率 R_{k,m}^{[e2e]} 并得到传输时间 =========
-        # 第一跳速率：rk_m_embb 已经计算好 (NIND, eMBB_num, RAT_num_up)
+
+        # ========= 计算 eMBB 的两跳有效速率 R_{k,m}^{[e2e]} 并直接计算communication time =========
+        # 第一跳速率：r_first_embb 已经计算好 (NIND, eMBB_num, RAT_num_up)
         # 第二跳速率：
         # - terrestrial 路径：由回传容量 C_vec 决定（固定）
         # - satellite 路径：在每颗卫星的总功率约束下，对接入该卫星的 eMBB 用户做功率分配，再计算下行 data rate
-
-        # 提取卫星->gateway 下行信道（在 Position_channel_gen 中已追加到 channel 的最后 M3 列）
         M3 = self.RAT_num_sat  # 卫星数量
         sat_to_gateway_channel_full = channel[:, self.RAT_num_cure:self.RAT_num_cure + M3]  # (num_users, M3)
         # 卫星->gateway 信道只与卫星和gateway位置有关，与用户无关；每一行相同，取第一行为 (M3,)
@@ -321,13 +325,13 @@ class MyproblemInner:
 
         # 构造第二跳速率矩阵（与 rk_m_embb 同形状）
         C_vec_up = self.C_vec[:self.RAT_num_up]  # 对应上行 RAT 的回传容量，形状 (RAT_num_up,)
-        r_second_embb = np.zeros_like(rk_m_embb)
+        r_second_embb = np.zeros_like(r_first_embb)
 
         r_second_embb[:,:,:self.RAT_num_terrestrial] = C_vec_up[:self.RAT_num_terrestrial]
 
         # ========= satellite 第二跳：每颗卫星在“接入该卫星的用户之间”做 capped water-filling =========
         # cap 取第一跳速率（希望第一跳为瓶颈）：C_sat_down 形状 (NIND, eMBB_num, M3)
-        C_sat_down = rk_m_embb[:, :, self.RAT_num_terrestrial:]
+        C_sat_down = r_first_embb[:, :, self.RAT_num_terrestrial:]
 
         # 1) 功率分配：输出 (NIND, eMBB_num, M3)，每颗卫星总功率预算为 self.L_sat_eMBB_down_total
         embb_sat_power_matrix_down = satellite_downlink_power_allocation(
@@ -338,15 +342,12 @@ class MyproblemInner:
             cap_rate_matrix=C_sat_down,
         )
 
-        # 2) 用功率 + 信道 计算第二跳速率 r^{(2)}：
-        #    r = B * log2(1 + P * |h|^2 / (B*N0))
+
         h2_sat = sat_to_gateway_gain2.reshape(1, 1, M3)  # (1,1,M3) 便于广播
 
-        # 关键：B=0 时该链路不传输，速率应为 0；不要用 (B*N0 + eps) 这种方式“平滑”分母，否则会显著扭曲结果。
         denom_sat = N0 * embb_band_matrix_down  # (NIND,eMBB_num,M3)
         mask_sat = embb_band_matrix_down > 0    # 只在 B>0 的位置计算 SNR/速率
 
-        # 用 where=mask 的安全除法，避免对 h2_sat 做布尔索引导致维度不匹配
         r_second_embb_sat_snr = np.zeros_like(denom_sat, dtype=float)
         np.divide(
             embb_sat_power_matrix_down * h2_sat,
@@ -360,36 +361,23 @@ class MyproblemInner:
 
         # 3) 填回 r_second_embb 的卫星两列（对应上行的卫星 RAT 位置）
         r_second_embb[:, :, self.RAT_num_terrestrial:] = r_second_embb_sat
+        r_second_embb = r_second_embb * binary_matrix_embb_up
         
-        # 两跳有效速率 R_{k,m}^{[e2e]} = min(r^{(1)}, r^{(2)})
-        R_e2e_embb = np.minimum(rk_m_embb, r_second_embb)
+        # 两跳有效速率 
+        R_e2e_embb = np.minimum(r_first_embb, r_second_embb)
     
         # 基于 Lemma 1：对于给定的 {R_{k,m}^{[e2e]}}, eMBB 的最优传输时间为
         #   τ_k = α_k / Σ_m R_{k,m}^{[e2e]}
         # 代码层面：直接用 Σ_m R_{k,m}^{[e2e]} 替换原来的一跳 Σ_m r_{k,m}
         R_e2e_sum = np.sum(R_e2e_embb, axis=2, keepdims=True)  # NIND x eMBB_num x 1
-        transmission_time_embb = embb_data / (R_e2e_sum + eps)   # NIND x eMBB_num x 1
-        transmission_time_embb = transmission_time_embb.reshape(NIND,-1)               # NIND x embb_num
-
-
-       
-        # 计算每个任务的计算时间（ms）
-        # 使用预加载的数据
-        cpu_cycles_urllc_expanded = np.tile(self.urllc_cpu_cycles, (Vars.shape[0], 1))  # (NIND, URLLC_num)
-        computation_time_urllc = cpu_cycles_urllc_expanded / cpu_rate_urllc  # (NIND, URLLC_num)
-
-        cpu_cycles_embb_expanded = np.tile(self.embb_cpu_cycles, (Vars.shape[0], 1))  # (NIND, eMBB_num)
-        computation_time_embb = cpu_cycles_embb_expanded / cpu_rate_embb  # (NIND, eMBB_num)
-
-        # URLLC 和 eMBB 的 deadline 时间
-        deadline_urllc = np.tile(self.urllc_deadline, (Vars.shape[0], 1))   # (NIND, URLLC_num)
-        deadline_embb = np.tile(self.embb_deadline, (Vars.shape[0], 1))   # (NIND, eMBB_num)
+        Communication_delay_eMBB_e2e = embb_data / (R_e2e_sum + eps)   # NIND x eMBB_num x 1
+        Communication_delay_eMBB_e2e = Communication_delay_eMBB_e2e.reshape(NIND,-1)               # eMBB 两跳的 comminication time
 
 
 
 
 
-        # *************** downlink ***************
+        # *************** 计算URLLC的第二跳速率，并且计算communication time e2e ***************
 
         # URLLC 是 用全部 URLLC download 带宽和power进行传输 ，但是需要进行scheduling，因为可能会有多个URLLC任务到达，到达时间不同
         
@@ -398,11 +386,12 @@ class MyproblemInner:
         # 1. Terrestrial BSs (6G和Wi-Fi): 使用有线回传，下行速率 = C_m (回传容量)
         # 2. Satellite BSs: 使用无线链路，下行速率 = B_m^{down,u} * log2(1 + L_m^{down,u} * |h_{sat->gw}|^2 / (B_m^{down,u} * N0))
         
-        # 首先，需要识别每个URLLC任务关联到哪些RAT（通过上行关联判断）
-        # urllc_band_matrix_up: NIND x URLLC_num x RAT_num_up
-        # RAT索引：0,1=6G; 2,3=WiFi; 4,5=Satellite上行
         
         # 初始化下行速率矩阵（每个任务一个速率值）
+
+        # # 计算URLLC的第一跳的传输时间（单跳等效）
+        r_first_urllc_transmission_time = urllc_data/(rk_m_urllc_sum+eps)          # (NIND,self.urllc_num,1)
+        r_first_urllc_transmission_time = r_first_urllc_transmission_time.reshape(NIND,-1) # (NIND,self.urllc_num)
         rk_m_urllc_down_sum = np.zeros((NIND, self.URLLC_num))
         
         # 提取卫星到gateway的信道（在channel矩阵的后M3列，对所有用户都相同）
@@ -468,7 +457,7 @@ class MyproblemInner:
         
         # ========== 步骤2: 确定任务到达时间 ==========
         # 到达时间 = 上行传输完成时间（计算在gateway，所以到达时间就是上行传输完成时间）
-        arrival_time_urllc_downlink = transmission_time_urllc  # NIND x URLLC_num
+        arrival_time_urllc_downlink = r_first_urllc_transmission_time  # NIND x URLLC_num
         
         # ========== 步骤3: 实现下行FIFO调度 ==========
         # 对每个个体（NIND），按到达时间对URLLC任务进行排序，然后依次传输
@@ -477,7 +466,7 @@ class MyproblemInner:
         # 定义最大延迟（用于处理失败情况）
         max_delay_urllc = 2  # 与后面的定义保持一致
         
-        downlink_transmission_time_urllc = np.zeros((NIND, self.URLLC_num))
+        r_second_urllc_transmission_time = np.zeros((NIND, self.URLLC_num))
         downlink_queue_delay_urllc = np.zeros((NIND, self.URLLC_num))
         
         for i in range(NIND):
@@ -499,7 +488,7 @@ class MyproblemInner:
                 
                 # 如果任务没有关联卫星BS（下行速率为0），跳过或标记为失败
                 if downlink_rate < eps:
-                    downlink_transmission_time_urllc[i, idx] = max_delay_urllc
+                    r_second_urllc_transmission_time[i, idx] = max_delay_urllc
                     downlink_queue_delay_urllc[i, idx] = max_delay_urllc
                     continue
                 
@@ -516,31 +505,65 @@ class MyproblemInner:
                     queue_delay = current_time - arrival_time
                     current_time = current_time + transmission_time
                 
-                downlink_transmission_time_urllc[i, idx] = transmission_time
+                r_second_urllc_transmission_time[i, idx] = transmission_time
                 downlink_queue_delay_urllc[i, idx] = queue_delay
         
         # URLLC端到端总延迟 = 上行传输时间 + 下行队列延迟 + 下行传输时间
         # 注意：计算在gateway，所以没有单独的计算时间
-        total_delay_urllc_e2e = transmission_time_urllc + downlink_queue_delay_urllc + downlink_transmission_time_urllc
+        Communication_delay_urllc_e2e = r_first_urllc_transmission_time + downlink_queue_delay_urllc + r_second_urllc_transmission_time
 
 
 
-      #该做embb下行传输速率计算
+              # 计算每个任务的计算时间（ms）
+        # 使用预加载的数据
+        cpu_cycles_urllc_expanded = np.tile(self.urllc_cpu_cycles, (Vars.shape[0], 1))  # (NIND, URLLC_num)
+        computation_time_urllc = cpu_cycles_urllc_expanded / cpu_rate_urllc  # (NIND, URLLC_num)
+
+        cpu_cycles_embb_expanded = np.tile(self.embb_cpu_cycles, (Vars.shape[0], 1))  # (NIND, eMBB_num)
+        computation_time_embb = cpu_cycles_embb_expanded / cpu_rate_embb  # (NIND, eMBB_num)
+
+        # URLLC 和 eMBB 的 deadline 时间
+        deadline_urllc = np.tile(self.urllc_deadline, (Vars.shape[0], 1))   # (NIND, URLLC_num)
+        deadline_embb = np.tile(self.embb_deadline, (Vars.shape[0], 1))   # (NIND, eMBB_num)
 
 
 
                 
         # 带宽约束项 check
-        RAT_5G = np.sum(embb_band_matrix_up[:,:,[0]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[0]],axis=1)
-        RAT_4G = np.sum(embb_band_matrix_up[:,:,[1]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[1]],axis=1)
+        RAT_sixG1 = np.sum(embb_band_matrix_up[:,:,[0]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[0]],axis=1)
+        RAT_sixG2 = np.sum(embb_band_matrix_up[:,:,[1]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[1]],axis=1)
+
+        RAT_wifi1 = np.sum(embb_band_matrix_up[:,:,[2]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[2]],axis=1)
+        RAT_wifi2 = np.sum(embb_band_matrix_up[:,:,[3]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[3]],axis=1)
+
+        RAT_sat1_up_urllc =  np.sum(urllc_band_matrix_up[:,:,[4]],axis=1)
+        RAT_sat2_up_urllc =  np.sum(urllc_band_matrix_up[:,:,[5]],axis=1)
+        
+        RAT_sat1_up_embb = np.sum(embb_band_matrix_up[:,:,[4]],axis=1)
+        RAT_sat2_up_embb = np.sum(embb_band_matrix_up[:,:,[5]],axis=1) 
+
+
+        RAT_sat1_down_embb = np.sum(embb_band_matrix_down[:,:,[0]],axis=1) 
+        RAT_sat2_down_embb = np.sum(embb_band_matrix_down[:,:,[1]],axis=1) 
+
+
+ 
 
 
         
         # 采用可行性法则处理约束
         CV = np.hstack(
             [
-              RAT_5G - self.W_5g,
-              RAT_4G - self.W_4g,
+              RAT_sixG1 - self.W_6g,
+              RAT_sixG2 - self.W_6g,
+              RAT_wifi1 - self.W_wifi,
+              RAT_wifi2 - self.W_wifi,
+              RAT_sat1_up_urllc - self.W_sat_URLLC_up,
+              RAT_sat2_up_urllc - self.W_sat_URLLC_up,
+              RAT_sat1_up_embb - self.W_sat_eMBB_up,
+              RAT_sat2_up_embb - self.W_sat_eMBB_up,
+              RAT_sat1_down_embb - self.W_sat_eMBB_down,
+              RAT_sat2_down_embb - self.W_sat_eMBB_down,
             ])
         
         
@@ -553,7 +576,7 @@ class MyproblemInner:
         # ------------------------------------------------------------------------------------------------------------
         max_delay_urllc = 2
         max_delay_eMBB  = 2
-        queue_time_embb,queue_time_urllc,trans_time_eMBB,trans_time_URLLC,total_delay_eMBB,total_delay_URLLC= queue_delay_calculation (transmission_time_embb,transmission_time_urllc,
+        queue_time_embb,queue_time_urllc,trans_time_eMBB,trans_time_URLLC,total_delay_eMBB,total_delay_URLLC= queue_delay_calculation (Communication_delay_eMBB_e2e,Communication_delay_urllc_e2e,
                                                                     computation_time_embb,computation_time_urllc,
                                                                     deadline_embb,deadline_urllc,
                                                                     max_delay_urllc,max_delay_eMBB)
