@@ -784,24 +784,25 @@ if __name__=="__main__":
 
     # seed = np.random.seed(42)
     # outer= np.ones((k_urllc+k_embb,RAT_num))   # LLM (GPT),association  
-    outer = np.array([[1,0,0,0,0,0],[0,1,0,0,0,0],[0,0,1,0,0,0],[0,0,0,1,0,0],     # k1_u
-                     [0,0,0,0,1,0],[0,0,0,0,1,0],[0,0,0,0,0,1],[0,0,0,0,0,1],     # k2_u
-                     [0,1,0,0,0,0],[0,0,1,0,0,0],[0,1,0,0,0,0],[0,0,0,1,0,0],     # k3_u
-                     [1,0,1,0,0,0],[1,0,0,1,0,0],[1,0,1,0,0,0],[0,1,0,1,0,0],     # k1_e
-                     [0,0,0,0,1,0],[0,0,0,0,0,1],[0,0,0,0,0,1],[0,0,0,0,1,0],     # k2_e
-                     [0,1,0,1,1,0],[1,0,1,0,1,0],[1,0,1,0,0,1],[0,1,1,0,1,0]])     # k3_e
-    
+    for seed in range(10):
+        outer = np.array([[1,0,0,0,0,0],[0,1,0,0,0,0],[0,0,1,0,0,0],[0,0,0,1,0,0],     # k1_u
+                        [0,0,0,0,1,0],[0,0,0,0,1,0],[0,0,0,0,0,1],[0,0,0,0,0,1],     # k2_u
+                        [0,1,0,0,0,0],[0,0,1,0,0,0],[0,1,0,0,0,0],[0,0,0,1,0,0],     # k3_u
+                        [1,0,1,0,0,0],[1,0,0,1,0,0],[1,0,1,0,0,0],[0,1,0,1,0,0],     # k1_e
+                        [0,0,0,0,1,0],[0,0,0,0,0,1],[0,0,0,0,0,1],[0,0,0,0,1,0],     # k2_e
+                        [0,1,0,1,1,0],[1,0,1,0,1,0],[1,0,1,0,0,1],[0,1,1,0,1,0]])     # k3_e
+        
 
-    outer = np.concatenate([outer, outer[:, 4:6]], axis=1)
+        outer = np.concatenate([outer, outer[:, 4:6]], axis=1)
 
-    calculator = RATDistanceCalculator(urllc_num = k_urllc, embb_num = k_embb,RAT_num = RAT_num,time_ = seed )
-    user_positions = calculator.generate_user_positions()    # （24，3）个用户的位置
-    dk_m,channel = calculator.calculate_DistancesAndChennel(user_positions) # （24，6）个用户到各RAT的距离和信道增益
-    # ch = np.ones((k_embb+k_urllc,RAT_num))
+        calculator = RATDistanceCalculator(urllc_num = k_urllc, embb_num = k_embb,RAT_num = RAT_num,time_ = seed )
+        user_positions = calculator.generate_user_positions()    # （24，3）个用户的位置
+        dk_m,channel = calculator.calculate_DistancesAndChennel(user_positions) # （24，6）个用户到各RAT的距离和信道增益
+        # ch = np.ones((k_embb+k_urllc,RAT_num))
 
-    Inner = MyproblemInner(k_urllc,k_embb,RAT_num,seed,outer,channel,num_list,RAT_list)
-    population_best,fitness_best,CV_best,cost_urllc_best,fitness_generation_full  =  Inner.run_origin()
-    print(fitness_generation_full)
-    np.savetxt('Result/fitness_generation_best.csv',fitness_generation_full,delimiter=',')
+        Inner = MyproblemInner(k_urllc,k_embb,RAT_num,seed,outer,channel,num_list,RAT_list)
+        population_best,fitness_best,CV_best,cost_urllc_best,fitness_generation_full  =  Inner.run_origin()
+        print(fitness_generation_full)
+        np.savetxt('Result/fitness_generation_best_seed{}.csv'.format(seed),fitness_generation_full,delimiter=',')
 
 
