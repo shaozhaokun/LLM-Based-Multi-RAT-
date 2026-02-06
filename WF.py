@@ -2,6 +2,7 @@ import numpy as np
 
 
 BW_EPS_HZ = 1.0  # 带宽阈值：小于该值的带宽按 0 处理，避免数值噪声导致 C/W 溢出
+MAX_SE_TARGET = 80.0  # 2**60 ≈ 1e18，超过该谱效率时直接视为“cap 需要无穷大功率”
 
 
 def _water_filling_no_cap(W_row, h_row, N0, P_k):
@@ -90,15 +91,24 @@ def _capped_water_filling_single_user(W_row, h_row, N0, P_k, C_vec):
     # => P_m^c = (W_m * N0 / |h_m|^2) * (2^{C_m / W_m} - 1)
     P_c = np.zeros_like(W_row, dtype=float)
     for m in range(RAT_num):
-        if W_row[m] > BW_EPS_HZ and abs_h2[m] > 0 and C_vec is not None:
+        if W_row[m] > BW_EPS_HZ and abs_h2[m] > 0 and C_vec is not None: 
             C_m = C_vec[m]
-            # 如果该 RAT 没有回传约束（例如 C_m 为 inf 或 nan），视为无截断
+            # 如果该 RAT 没有回传约束（例如 C_m 为 inf 或 nan），视为无截断, 比如卫星
             if np.isinf(C_m) or np.isnan(C_m):
                 P_c[m] = np.inf
             else:
-                se_target = C_m / W_row[m]  # 目标谱效率
-                snr_target = 2.0 ** se_target - 1.0
-                P_c[m] = (W_row[m] * N0 / abs_h2[m]) * snr_target
+                # se_target = C/W；当 W 很小或 C 很大时可能非常大，直接算 2**se_target 会溢出。
+                # 溢出时等价于“需要无穷大功率才能达到 cap”，因此将 P_c 置为 inf（即不对该通道做 clip）。
+                se_target = C_m / W_row[m]
+                if se_target >= MAX_SE_TARGET:
+                    P_c[m] = np.inf
+                else:
+                    with np.errstate(over="ignore", invalid="ignore"):
+                        snr_target = np.exp2(se_target) - 1.0
+                    if not np.isfinite(snr_target):
+                        P_c[m] = np.inf
+                    else:
+                        P_c[m] = (W_row[m] * N0 / abs_h2[m]) * snr_target
         else:
             P_c[m] = 0.0
 

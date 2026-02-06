@@ -10,6 +10,7 @@ from WF import water_filling_power_allocation, satellite_downlink_power_allocati
 
 class MyproblemInner:
     def __init__(self, URLLC_num, eMBB_num, RAT_num_cure, seed, outer_ass,ch,num_list,RAT_list):
+        # decision variables 24 * 6 + 24 * 2 = 192
         self.URLLC_num = URLLC_num
         self.eMBB_num = eMBB_num
         self.RAT_num_cure = RAT_num_cure
@@ -23,7 +24,7 @@ class MyproblemInner:
         self.outer_ass_ = outer_ass  #  (,D) 
         self.ch = ch   # channel ((eMBB+URLLC),RAT_num)
         self.population_size = 10  # inner individual
-        self.generation = 1000        # inner generation
+        self.generation = 500        # inner generation
         self.embb = eMBB_num * RAT_num
         self.num_list = num_list   # [k1_u,k2_u,k3_u,k1_e,k2_e,k3_e]
         self.RAT_list = RAT_list   # [6G_BSs_num,Wi-Fi_BSs_num,Satellite_BSs_num]
@@ -676,11 +677,19 @@ class MyproblemInner:
         population_best = population[0]
         cost_urllc_best = 0
 
+        
+        population_generation_full = np.zeros((self.generation,self.chromosome_length))
+        fitness_generation_full = np.zeros((self.generation,1))
+        CV_generation_full = np.zeros((self.generation,1))
+        cost_urllc_generation_full = np.zeros((self.generation,1))
+
         for _ in range(self.generation):  # Number of generations
             population_generation = np.zeros((self.generation,self.chromosome_length))
             fitness_generation = np.zeros((self.generation,1))
             CV_generation = np.zeros((self.generation,1))
             cost_urllc_generation = np.zeros((self.generation,1))
+
+
 
 
 
@@ -725,12 +734,27 @@ class MyproblemInner:
                 trans_best = best_trans[0]
                 queue_best = best_queue[0]
 
+            
+            # 记录全部的最优解
+            if CV_best == 0:
+                fitness_generation_full[_] = best_fitness[0]
+                CV_generation_full[_] = best_CV_pha[0]
+
+            else:
+                
+                fitness_generation_full[_] = 0
+                CV_generation_full[_] = CV_generation_full[_]
+
+
 
 
             
             print('Innergeneration{}|| CV{} ||  Cost{}  ||'.format(_,CV_best,fitness_best))
 
-        return population_best,fitness_best,CV_best,cost_urllc_best       # population_best: (chormlength,1) fitness_best: : (NIND,1) CV_best: value
+
+
+
+        return population_best,fitness_best,CV_best,cost_urllc_best,fitness_generation_full       # population_best: (chormlength,1) fitness_best: : (NIND,1) CV_best: value
     
     
 
@@ -776,5 +800,8 @@ if __name__=="__main__":
     # ch = np.ones((k_embb+k_urllc,RAT_num))
 
     Inner = MyproblemInner(k_urllc,k_embb,RAT_num,seed,outer,channel,num_list,RAT_list)
-    population_best,fitness_best,CV_best,cost_urllc_best  =  Inner.run_origin()
+    population_best,fitness_best,CV_best,cost_urllc_best,fitness_generation_full  =  Inner.run_origin()
+    print(fitness_generation_full)
+    np.savetxt('Result/fitness_generation_best.csv',fitness_generation_full,delimiter=',')
+
 
