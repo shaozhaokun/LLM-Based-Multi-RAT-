@@ -8,7 +8,7 @@ from scipy.special import j1  # Bessel 函数，用于计算辐射方向图
 # 总共 M = M1 + M2 + M3，其中 M3 由 RAT_num - (M1+M2) 推断
 
 class RATDistanceCalculator:
-    def __init__(self, urllc_num, embb_num, RAT_num, time_):
+    def __init__(self, urllc_num, embb_num, RAT_num, time_,RAT_list):
         """
         初始化RAT距离计算器。
         
@@ -24,9 +24,9 @@ class RATDistanceCalculator:
         self.RAT_num = RAT_num
         
         # 根据论文模型定义索引范围
-        self.M1 = 2  # 6G BSs 数量
-        self.M2 = 2  # Wi-Fi BSs 数量
-        self.M3 = RAT_num - (self.M1 + self.M2)  # 卫星 BSs 数量（自动推断）
+        self.M1 = RAT_list[0]  # 6G BSs 数量
+        self.M2 = RAT_list[1] # Wi-Fi BSs 数量
+        self.M3 = RAT_list[2] # 卫星 BSs 数量（自动推断）
         assert self.M3 > 0, f"RAT_num={RAT_num} 太小：需要至少 {self.M1 + self.M2 + 1} 才能包含卫星"
          
         self.seed = time_
@@ -62,10 +62,17 @@ class RATDistanceCalculator:
         # 地面 BSs (z=0)，卫星 BS (z 很高)
         terrestrial_positions = np.array(
             [
+                # 前 4 个：6G BSs（RAT 0..3）
                 [-250.0,  250.0,    0.0],  # RAT 0: 6G BS 1
                 [ 250.0,  250.0,    0.0],  # RAT 1: 6G BS 2
-                [-250.0, -250.0,    0.0],  # RAT 2: Wi-Fi BS 1
-                [ 250.0, -250.0,    0.0],  # RAT 3: Wi-Fi BS 2
+                [-250.0,  750.0,    0.0],  # RAT 2: 6G BS 3
+                [ 250.0,  750.0,    0.0],  # RAT 3: 6G BS 4
+
+                # 后 4 个：Wi-Fi BSs（RAT 4..7）
+                [-250.0, -250.0,    0.0],  # RAT 4: Wi-Fi BS 1
+                [ 250.0, -250.0,    0.0],  # RAT 5: Wi-Fi BS 2
+                [-250.0, -750.0,    0.0],  # RAT 6: Wi-Fi BS 3
+                [ 250.0, -750.0,    0.0],  # RAT 7: Wi-Fi BS 4
             ],
             dtype=float,
         )
@@ -257,7 +264,14 @@ class RATDistanceCalculator:
         # RAT 4, 5: 卫星 BS (M3) - 需要很大的增益来补偿路径损耗
         # 注意：这些增益值可以根据你的实际模型调整
         # 增益向量长度需与 RAT_num 一致：地面 4 个 + M3 个卫星
-        gain_terrestrial = np.array([10.0, 10.0, 5.0, 5.0], dtype=float)
+        # 让增益“写活”：前 M1 个（6G）用 10，后 M2 个（Wi-Fi）用 5
+        gain_terrestrial = np.concatenate(
+            [
+                np.full(self.M1, 10.0, dtype=float),
+                np.full(self.M2, 5.0, dtype=float),
+            ],
+            axis=0,
+        )
         # 卫星增益需要很大来补偿巨大的路径损耗（550km 距离 + Ku/Ka 波段频率）
         # 频率从 2 GHz 增加到 14 GHz（Ku 波段），路径损耗增加 49 倍
         # 虽然频率降低了，但仍需要保持较大的增益值来补偿

@@ -63,7 +63,13 @@ class MyproblemInner:
         C_6g = 4e7  # 6G 回传容量，单位：bit/s（可根据实际模型调整）
         C_wifi = 2e6  # Wi-Fi 回传容量，单位：bit/s
         C_sat = np.inf  # 卫星：无回传容量约束
-        self.C_vec = np.array([C_6g, C_6g, C_wifi, C_wifi, C_sat, C_sat])  # 对应 RAT 0,1,2,3,4,5
+        # 只为“上行RAT”（6G + Wi-Fi + 卫星上行）准备回传容量向量，长度 = M1 + M2 + M3 = RAT_num_up
+        self.C_vec = np.array(
+            [C_6g] * int(self.RAT_list[0]) +
+            [C_wifi] * int(self.RAT_list[1]) +
+            [C_sat] * int(self.RAT_list[2]),
+            dtype=float,
+        )
 
         lb_band_URLLC = [0]* self.URLLC_num * self.RAT_num
         ub_band_URLLC = ([self.W_6g_] * self.RAT_list[0] + [self.W_wifi_] * self.RAT_list[1] +
@@ -770,10 +776,9 @@ if __name__=="__main__":
     k_embb = k1_e + k2_e + k3_e 
     k_urllc = k1_u + k2_u + k3_u 
     num_list =[k1_u,k2_u,k3_u,k1_e,k2_e,k3_e]
-    
-    RAT_num = 6
-    SixG_BSs_num = 2
-    WiFi_BSs_num = 2
+
+    SixG_BSs_num = 4
+    WiFi_BSs_num = 4
     Satellite_BSs_num = 2
     RAT_num = SixG_BSs_num + WiFi_BSs_num + Satellite_BSs_num
     RAT_list = np.array([SixG_BSs_num,WiFi_BSs_num,Satellite_BSs_num,Satellite_BSs_num])
@@ -785,17 +790,17 @@ if __name__=="__main__":
     # seed = np.random.seed(42)
     # outer= np.ones((k_urllc+k_embb,RAT_num))   # LLM (GPT),association  
     for seed in range(10):
-        outer = np.array([[1,0,0,0,0,0],[0,1,0,0,0,0],[0,0,1,0,0,0],[0,0,0,1,0,0],     # k1_u
-                        [0,0,0,0,1,0],[0,0,0,0,1,0],[0,0,0,0,0,1],[0,0,0,0,0,1],     # k2_u
-                        [0,1,0,0,0,0],[0,0,1,0,0,0],[0,1,0,0,0,0],[0,0,0,1,0,0],     # k3_u
-                        [1,0,1,0,0,0],[1,0,0,1,0,0],[1,0,1,0,0,0],[0,1,0,1,0,0],     # k1_e
-                        [0,0,0,0,1,0],[0,0,0,0,0,1],[0,0,0,0,0,1],[0,0,0,0,1,0],     # k2_e
-                        [0,1,0,1,1,0],[1,0,1,0,1,0],[1,0,1,0,0,1],[0,1,1,0,1,0]])     # k3_e
+        outer = np.array([[1,0,0,0, 0,0,0,0,0,0],[0,1,0,0,0,0,0,0,0,0],[0,0,1,0,0,0,0,0,0,0],[0,0,0,0,1,0,0,0,0,0],     # k1_u
+                        [0,0,0,0, 0,0,0,0,1,0],[0,0,0,0, 0,0,0,0,0,1],[0,0,0,0, 0,0,0,0,1,0],[1,0,0,0, 0,0,0,0,0,1],     # k2_u
+                        [0,1,0,0, 0,0,0,0,0,0],[0,0,0,0, 0,0,0,1,0,0],[0,1,0,0, 0,0,0,0,0,0],[0,0,0,1, 0,0,0,0,0,0],     # k3_u
+                        [1,0,0,0,1,0,0,0,0,0],[0,0,1,0,0,1,0,0,0,0],[0,0,0,1,0,0,1,0,0,0],[0,0,0,0,1,0,0,1,0,0],     # k1_e
+                        [0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,0,1],[0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,0,1],     # k2_e
+                        [0,1,0,0,0,1,0,0,1,0],[1,0,0,0,1,0,0,0,0,1],[1,0,0,0,0,0,0,1,1,0],[0,1,0,0,0,0,1,0,1,0]])     # k3_e
         
 
-        outer = np.concatenate([outer, outer[:, 4:6]], axis=1)
+        outer = np.concatenate([outer, outer[:, SixG_BSs_num+WiFi_BSs_num:RAT_num]], axis=1)
 
-        calculator = RATDistanceCalculator(urllc_num = k_urllc, embb_num = k_embb,RAT_num = RAT_num,time_ = seed )
+        calculator = RATDistanceCalculator(urllc_num = k_urllc, embb_num = k_embb,RAT_num = RAT_num,time_ = seed,RAT_list = RAT_list)
         user_positions = calculator.generate_user_positions()    # （24，3）个用户的位置
         dk_m,channel = calculator.calculate_DistancesAndChennel(user_positions) # （24，6）个用户到各RAT的距离和信道增益
         # ch = np.ones((k_embb+k_urllc,RAT_num))
