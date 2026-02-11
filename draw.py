@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 save_path = "Result/fitness_generation_best.png"  # 不想保存就改成 None
-title = "Fitness Valueunder Fixed Outer Association"
+title = "Cost Value under Fixed Outer Association"
 
 # 注意：np.load 只能读 .npy/.npz；CSV/纯文本请用 np.loadtxt
 start_gen = 30
@@ -33,8 +33,8 @@ plt.plot(x, mean_curve, label=f"{title} (mean)")
 
 plt.title(title)
 plt.xlabel("Inner Generation")
-plt.ylabel("Fitness Value")
-plt.ylim(20, 35)
+plt.ylabel("Cost Value")
+plt.ylim(25, 30)
 plt.grid(True, alpha=0.3)
 plt.legend()
 plt.tight_layout()
