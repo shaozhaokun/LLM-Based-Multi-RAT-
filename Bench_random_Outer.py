@@ -7,6 +7,63 @@ from Position_channel_gen import RATDistanceCalculator
 from WF import water_filling_power_allocation, satellite_downlink_power_allocation
 
 
+def generate_random_outer(num_list, rat_num: int, sixg_num: int, wifi_num: int, sat_num: int, seed: int) -> np.ndarray:
+    """
+    随机生成 association(outer) 矩阵，带规则：
+    - URLLC：只能连接 1 个（one-hot）
+    - eMBB：可以连接多个（multi-hot），但至少 1 个
+    - 分区域接入：
+        K1(city)：只能连 terrestrial(6G+WiFi)
+        K2(ocean)：只能连 satellite
+        K3(hybrid)：都可以连
+
+    返回 outer: shape = (K_total, rat_num)
+    """
+    k1_u, k2_u, k3_u, k1_e, k2_e, k3_e = [int(x) for x in num_list]
+    k_urllc = k1_u + k2_u + k3_u
+    k_embb = k1_e + k2_e + k3_e
+    k_total = k_urllc + k_embb
+
+    assert rat_num == sixg_num + wifi_num + sat_num
+    terrestrial = np.arange(0, sixg_num + wifi_num, dtype=int)
+    satellite = np.arange(sixg_num + wifi_num, rat_num, dtype=int)
+
+    rng = np.random.default_rng(int(seed))
+    outer = np.zeros((k_total, rat_num), dtype=int)
+
+    def allowed_for_urllc(u_idx: int) -> np.ndarray:
+        if u_idx < k1_u:
+            return terrestrial
+        if u_idx < k1_u + k2_u:
+            return satellite
+        return np.arange(0, rat_num, dtype=int)
+
+    def allowed_for_embb(e_idx: int) -> np.ndarray:
+        if e_idx < k1_e:
+            return terrestrial
+        if e_idx < k1_e + k2_e:
+            return satellite
+        return np.arange(0, rat_num, dtype=int)
+
+    # URLLC one-hot
+    for u in range(k_urllc):
+        allowed = allowed_for_urllc(u)
+        pick = int(rng.choice(allowed))
+        outer[u, pick] = 1
+
+    # eMBB multi-hot (至少一个)
+    p = 0.1  # 每个允许 RAT 被选中的概率
+    for e in range(k_embb):
+        row = k_urllc + e
+        allowed = allowed_for_embb(e)
+        bits = (rng.random(allowed.size) < p).astype(int)
+        if bits.sum() == 0:
+            bits[int(rng.integers(0, allowed.size))] = 1
+        outer[row, allowed] = bits
+
+    return outer
+
+
 
 class MyproblemInner:
     def __init__(self, URLLC_num, eMBB_num, RAT_num_cure, seed, outer_ass,ch,num_list,RAT_list):
@@ -790,12 +847,15 @@ if __name__=="__main__":
     # seed = np.random.seed(42)
     # outer= np.ones((k_urllc+k_embb,RAT_num))   # LLM (GPT),association  
     for seed in range(10):
-        outer = np.array([[1,0,0,0, 0,0,0,0,0,0],[0,1,0,0,0,0,0,0,0,0],[0,0,1,0,0,0,0,0,0,0],[0,0,0,0,1,0,0,0,0,0],     # k1_u
-                        [0,0,0,0, 0,0,0,0,1,0],[0,0,0,0, 0,0,0,0,0,1],[0,0,0,0, 0,0,0,0,1,0],[1,0,0,0, 0,0,0,0,0,1],     # k2_u
-                        [0,1,0,0, 0,0,0,0,0,0],[0,0,0,0, 0,0,0,1,0,0],[0,1,0,0, 0,0,0,0,0,0],[0,0,0,1, 0,0,0,0,0,0],     # k3_u
-                        [1,0,0,0,1,0,0,0,0,0],[0,0,1,0,0,1,0,0,0,0],[0,0,0,1,0,0,1,0,0,0],[0,0,0,0,1,0,0,1,0,0],     # k1_e
-                        [0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,0,1],[0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,0,1],     # k2_e
-                        [0,1,0,0,0,1,0,0,1,0],[1,0,0,0,1,0,0,0,0,1],[1,0,0,0,0,0,0,1,1,0],[0,1,0,0,0,0,1,0,1,0]])     # k3_e
+        # 按规则随机生成 outer（association）
+        outer = generate_random_outer(
+            num_list=num_list,
+            rat_num=RAT_num,
+            sixg_num=SixG_BSs_num,
+            wifi_num=WiFi_BSs_num,
+            sat_num=Satellite_BSs_num,
+            seed=seed,
+        )
 
         # outer = np.array([[0,1,0,0, 0,0,0,0,0,0],[0,1,0,0,0,0,0,0,0,0],[1,0,0,0,0,0,0,0,0,0],[0,0,1,0,0,0,0,0,0,0],     # k1_u
         #                 [0,0,0,0, 0,0,0,0,1,0],[0,0,0,0, 0,0,0,0,0,1],[0,0,0,0, 0,0,0,0,1,0],[1,0,0,0, 0,0,0,0,1,0],     # k2_u
@@ -826,6 +886,6 @@ if __name__=="__main__":
         Inner = MyproblemInner(k_urllc,k_embb,RAT_num,seed,outer,channel,num_list,RAT_list)
         population_best,fitness_best,CV_best,cost_urllc_best,fitness_generation_full  =  Inner.run_origin()
         print(fitness_generation_full)
-        np.savetxt('Result/fitness_generation_best_seed{}.csv'.format(seed),fitness_generation_full,delimiter=',')
+        np.savetxt('Result_random/fitness_generation_best_seed{}.csv'.format(seed),fitness_generation_full,delimiter=',')
 
 

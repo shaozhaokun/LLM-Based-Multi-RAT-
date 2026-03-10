@@ -9,7 +9,7 @@ from WF import water_filling_power_allocation, satellite_downlink_power_allocati
 
 
 class MyproblemInner:
-    def __init__(self, URLLC_num, eMBB_num, RAT_num_cure, seed, outer_ass,ch,num_list,RAT_list):
+    def __init__(self, URLLC_num, eMBB_num, RAT_num_cure, seed, outer_ass=None, ch=None, num_list=None, RAT_list=None, optimize_joint: bool = False):
         # decision variables 24 * 6 + 24 * 2 = 192
         self.URLLC_num = URLLC_num
         self.eMBB_num = eMBB_num
@@ -28,13 +28,29 @@ class MyproblemInner:
         self.embb = eMBB_num * RAT_num
         self.num_list = num_list   # [k1_u,k2_u,k3_u,k1_e,k2_e,k3_e]
         self.RAT_list = RAT_list   # [6G_BSs_num,Wi-Fi_BSs_num,Satellite_BSs_num]
+        self.optimize_joint = optimize_joint
+
+        if (not self.optimize_joint) and (outer_ass is None):
+            raise ValueError("optimize_joint=False 时 outer_ass 不能为空（旧模式需要固定 association 掩码）。")
+        if self.optimize_joint and self.num_list is None:
+            raise ValueError("optimize_joint=True 时 num_list 不能为空（用于 K1/K2/K3 接入约束修复）。")
+        if self.RAT_list is None:
+            raise ValueError("RAT_list 不能为空。")
+        if self.ch is None:
+            raise ValueError("ch(channel) 不能为空。")
 
 
 
 
         self.chromosome_length = (self.eMBB_num +self.URLLC_num) * self.RAT_num     # （K_u + K_e）* M     
-        self.outer_ass = self.outer_ass_.reshape(1,self.chromosome_length)
-        self.outer_ass_reshape = self.outer_ass.reshape(-1,self.RAT_num) 
+        self.outer_ass = self.outer_ass_.reshape(1,self.chromosome_length) if self.outer_ass_ is not None else None
+        self.outer_ass_reshape = self.outer_ass.reshape(-1,self.RAT_num) if self.outer_ass is not None else None
+
+        # joint 编码：association(up) + allocation(full)
+        self.K_total = self.URLLC_num + self.eMBB_num
+        self.assoc_up_length = self.K_total * self.RAT_num_up          # 只优化上行关联；下行卫星关联由上行卫星关联派生
+        self.band_length = self.chromosome_length                      # allocation 仍是 full (up + down) 带宽
+        self.joint_length = self.assoc_up_length + self.band_length
 
         self.W_6g = 50 * 1e6     # 50 MHz
         self.W_wifi = 10 * 1e6     # 10 MHz
@@ -104,10 +120,201 @@ class MyproblemInner:
                                          self.chromosome_length) + np.dot(np.ones((self.population_size,1)),self.lb)) * (np.dot(np.ones((self.population_size,1)) , self.outer_ass ))
 
         return population_
+
+    # =========================
+    # Joint optimization (association + allocation)
+    # =========================
+    def _allowed_uplink_rats_for_user(self, user_global_idx: int) -> np.ndarray:
+        """
+        根据 num_list 里的 K1/K2/K3 约束，返回该用户允许接入的 uplink RAT 索引集合（0..RAT_num_up-1）。
+        约定：
+        - terrestrial uplink: [0, RAT_num_terrestrial)
+        - satellite uplink:   [RAT_num_terrestrial, RAT_num_up)
+        """
+        k1_u, k2_u, k3_u, k1_e, k2_e, k3_e = self.num_list
+        urllc_end = self.URLLC_num
+
+        terrestrial = np.arange(0, self.RAT_num_terrestrial, dtype=int)
+        satellite = np.arange(self.RAT_num_terrestrial, self.RAT_num_up, dtype=int)
+
+        if user_global_idx < urllc_end:
+            j = user_global_idx
+            if j < k1_u:
+                return terrestrial
+            if j < k1_u + k2_u:
+                return satellite
+            return np.arange(0, self.RAT_num_up, dtype=int)  # hybrid
+        else:
+            j = user_global_idx - urllc_end
+            if j < k1_e:
+                return terrestrial
+            if j < k1_e + k2_e:
+                return satellite
+            return np.arange(0, self.RAT_num_up, dtype=int)  # hybrid
+
+    def _repair_assoc_up(self, assoc_up: np.ndarray) -> np.ndarray:
+        """
+        assoc_up: (NIND, K_total, RAT_num_up) 0/1
+        修复规则：
+        - 按 K1/K2/K3 禁止接入的 RAT 置 0
+        - URLLC：每个用户 uplink 必须 one-hot（恰好 1 个）
+        - eMBB：每个用户 uplink 至少 1 个
+        """
+        NIND = assoc_up.shape[0]
+
+        # 1) access restriction
+        for u in range(self.K_total):
+            allowed = self._allowed_uplink_rats_for_user(u)
+            mask_allowed = np.zeros((self.RAT_num_up,), dtype=int)
+            mask_allowed[allowed] = 1
+            assoc_up[:, u, :] = assoc_up[:, u, :] * mask_allowed.reshape(1, -1)
+
+        # 2) URLLC one-hot
+        for u in range(self.URLLC_num):
+            allowed = self._allowed_uplink_rats_for_user(u)
+            # 若全 0，随机补 1；若多于 1，随机保留 1
+            for i in range(NIND):
+                ones = np.where(assoc_up[i, u, :] > 0)[0]
+                if ones.size == 0:
+                    pick = int(np.random.choice(allowed))
+                    assoc_up[i, u, :] = 0
+                    assoc_up[i, u, pick] = 1
+                elif ones.size > 1:
+                    pick = int(np.random.choice(ones))
+                    assoc_up[i, u, :] = 0
+                    assoc_up[i, u, pick] = 1
+
+        # 3) eMBB at least one
+        for u in range(self.URLLC_num, self.K_total):
+            allowed = self._allowed_uplink_rats_for_user(u)
+            for i in range(NIND):
+                if np.sum(assoc_up[i, u, :]) == 0:
+                    pick = int(np.random.choice(allowed))
+                    assoc_up[i, u, pick] = 1
+
+        return assoc_up.astype(int)
+
+    def _build_assoc_full_from_up(self, assoc_up: np.ndarray) -> np.ndarray:
+        """
+        assoc_up: (NIND,K_total,RAT_num_up)
+        return assoc_full: (NIND,K_total,RAT_num_up+RAT_num_down)
+        规则：下行卫星关联 = 上行卫星关联（最后 M3 列）
+        """
+        NIND = assoc_up.shape[0]
+        assoc_full = np.zeros((NIND, self.K_total, self.RAT_num), dtype=int)
+        assoc_full[:, :, : self.RAT_num_up] = assoc_up
+
+        # downlink 只对应卫星，数量应等于 RAT_num_sat
+        m3 = self.RAT_num_sat
+        assoc_sat_up = assoc_up[:, :, self.RAT_num_terrestrial : self.RAT_num_terrestrial + m3]
+        assoc_full[:, :, self.RAT_num_up : self.RAT_num_up + m3] = assoc_sat_up
+        return assoc_full
+
+    def initialize_population_joint(self) -> np.ndarray:
+        """
+        joint individual = [assoc_up (0/1), band (continuous)]
+        """
+        # assoc_up init
+        assoc_up = np.zeros((self.population_size, self.K_total, self.RAT_num_up), dtype=int)
+
+        # 使用 outer_ass 作为“一个先验个体”（如果提供），其余随机
+        if self.outer_ass is not None:
+            outer_full = self.outer_ass.reshape(1, self.K_total, self.RAT_num)[0]
+            assoc_up[0, :, :] = outer_full[:, : self.RAT_num_up].astype(int)
+
+        start_i = 1 if self.outer_ass is not None else 0
+        for i in range(start_i, self.population_size):
+            for u in range(self.K_total):
+                allowed = self._allowed_uplink_rats_for_user(u)
+                if u < self.URLLC_num:
+                    pick = int(np.random.choice(allowed))
+                    assoc_up[i, u, pick] = 1
+                else:
+                    # eMBB：随机多连接，但至少一个
+                    bits = (np.random.rand(allowed.size) < 0.5).astype(int)
+                    if np.sum(bits) == 0:
+                        bits[np.random.randint(0, allowed.size)] = 1
+                    assoc_up[i, u, allowed] = bits
+
+        assoc_up = self._repair_assoc_up(assoc_up)
+        assoc_full = self._build_assoc_full_from_up(assoc_up)
+
+        # band init（全维度），再用 assoc_full 掩码
+        band = (np.dot(np.ones((self.population_size, 1)), (self.ub - self.lb)) * np.random.rand(self.population_size, self.band_length)
+                + np.dot(np.ones((self.population_size, 1)), self.lb))
+        band = band * assoc_full.reshape(self.population_size, -1)
+
+        joint = np.hstack([assoc_up.reshape(self.population_size, -1).astype(float), band.astype(float)])
+        return joint
+
+    def _decode_joint(self, X_joint: np.ndarray):
+        """
+        X_joint: (NIND, joint_length)
+        return: (assoc_up (NIND,K,RAT_num_up), assoc_full (NIND,K,RAT_num), band_masked_flat (NIND,band_length))
+        """
+        NIND = X_joint.shape[0]
+        assoc_part = X_joint[:, : self.assoc_up_length]
+        band_part = X_joint[:, self.assoc_up_length :]
+
+        assoc_up = (assoc_part.reshape(NIND, self.K_total, self.RAT_num_up) > 0.5).astype(int)
+        assoc_up = self._repair_assoc_up(assoc_up)
+        assoc_full = self._build_assoc_full_from_up(assoc_up)
+
+        band = band_part.reshape(NIND, self.K_total, self.RAT_num)
+        band_masked = band * assoc_full
+        return assoc_up, assoc_full, band_masked.reshape(NIND, -1)
+
+    def mutate_joint(self, population_joint: np.ndarray, F: float = 0.8) -> np.ndarray:
+        """
+        对 allocation 做 DE 变异；association 复制 base 个体。
+        """
+        N = population_joint.shape[0]
+        assoc = population_joint[:, : self.assoc_up_length]
+        band = population_joint[:, self.assoc_up_length :]
+
+        # allocation donor
+        donor_band = self.mutate(band, F=F)
+
+        # association donor：复制随机 base（模仿 Single_DE 思路）
+        donor_assoc = np.zeros_like(assoc)
+        for i in range(N):
+            idxs = [idx for idx in range(N) if idx != i]
+            a = int(np.random.choice(idxs))
+            donor_assoc[i] = assoc[a]
+
+        return np.hstack([donor_assoc, donor_band])
+
+    def crossover_joint(self, population_joint: np.ndarray, mutant_joint: np.ndarray, CR: float = 0.7) -> np.ndarray:
+        """
+        - allocation：沿用原来的随机掩码交叉
+        - association：按“用户块”做交叉（每个用户以 CR 概率从 mutant 继承）
+        """
+        N = population_joint.shape[0]
+        assoc = population_joint[:, : self.assoc_up_length]
+        band = population_joint[:, self.assoc_up_length :]
+        mutant_assoc = mutant_joint[:, : self.assoc_up_length]
+        mutant_band = mutant_joint[:, self.assoc_up_length :]
+
+        # allocation crossover（原逻辑）
+        trial_band = self.crossover(band, mutant_band, CR=CR)
+
+        # association crossover（按用户块）
+        trial_assoc = assoc.copy()
+        user_block = self.RAT_num_up
+        for i in range(N):
+            for u in range(self.K_total):
+                if np.random.rand() < CR:
+                    s = u * user_block
+                    e = s + user_block
+                    trial_assoc[i, s:e] = mutant_assoc[i, s:e]
+
+        # repair association & enforce mask on band
+        assoc_up, assoc_full, band_masked = self._decode_joint(np.hstack([trial_assoc, trial_band]))
+        return np.hstack([assoc_up.reshape(N, -1).astype(float), band_masked.astype(float)])
     
     
 
-    def mutate(self, population, F=0.8):
+    def mutate(self, population, F=0.5):
         F_matrix_ = F * np.ones((self.population_size,1))    # N_2 x 1
         F_matrix =  F_matrix_ @ np.ones((1, self.chromosome_length))  # N_2 x D
         
@@ -536,42 +743,36 @@ class MyproblemInner:
 
 
                 
-        # 带宽约束项 check
-        RAT_sixG1 = np.sum(embb_band_matrix_up[:,:,[0]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[0]],axis=1)
-        RAT_sixG2 = np.sum(embb_band_matrix_up[:,:,[1]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[1]],axis=1)
+        # 带宽约束项 check（按 RAT_list 自动适配：6G(M1)、WiFi(M2)、SAT up(M3)、SAT down(M3)）
+        M1 = int(self.RAT_list[0])
+        M2 = int(self.RAT_list[1])
+        M3 = int(self.RAT_list[2])
 
-        RAT_wifi1 = np.sum(embb_band_matrix_up[:,:,[2]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[2]],axis=1)
-        RAT_wifi2 = np.sum(embb_band_matrix_up[:,:,[3]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[3]],axis=1)
+        CV_terms = []
 
-        RAT_sat1_up_urllc =  np.sum(urllc_band_matrix_up[:,:,[4]],axis=1)
-        RAT_sat2_up_urllc =  np.sum(urllc_band_matrix_up[:,:,[5]],axis=1)
-        
-        RAT_sat1_up_embb = np.sum(embb_band_matrix_up[:,:,[4]],axis=1)
-        RAT_sat2_up_embb = np.sum(embb_band_matrix_up[:,:,[5]],axis=1) 
+        # uplink terrestrial: 逐 RAT 检查
+        for m in range(M1):
+            rat_sum = np.sum(embb_band_matrix_up[:, :, [m]], axis=1) + np.sum(urllc_band_matrix_up[:, :, [m]], axis=1)
+            CV_terms.append(rat_sum - self.W_6g)
+        for m in range(M1, M1 + M2):
+            rat_sum = np.sum(embb_band_matrix_up[:, :, [m]], axis=1) + np.sum(urllc_band_matrix_up[:, :, [m]], axis=1)
+            CV_terms.append(rat_sum - self.W_wifi)
 
+        # uplink satellite: URLLC 与 eMBB 分开约束（每颗卫星各一条）
+        sat_up_start = M1 + M2
+        for s in range(M3):
+            m = sat_up_start + s
+            urllc_sum = np.sum(urllc_band_matrix_up[:, :, [m]], axis=1)
+            embb_sum = np.sum(embb_band_matrix_up[:, :, [m]], axis=1)
+            CV_terms.append(urllc_sum - self.W_sat_URLLC_up)
+            CV_terms.append(embb_sum - self.W_sat_eMBB_up)
 
-        RAT_sat1_down_embb = np.sum(embb_band_matrix_down[:,:,[0]],axis=1) 
-        RAT_sat2_down_embb = np.sum(embb_band_matrix_down[:,:,[1]],axis=1) 
+        # downlink satellite (eMBB): W_matrix_down 的列从 0..M3-1
+        for s in range(M3):
+            embb_down_sum = np.sum(embb_band_matrix_down[:, :, [s]], axis=1)
+            CV_terms.append(embb_down_sum - self.W_sat_eMBB_down)
 
-
- 
-
-
-        
-        # 采用可行性法则处理约束
-        CV = np.hstack(
-            [
-              RAT_sixG1 - self.W_6g,
-              RAT_sixG2 - self.W_6g,
-              RAT_wifi1 - self.W_wifi,
-              RAT_wifi2 - self.W_wifi,
-              RAT_sat1_up_urllc - self.W_sat_URLLC_up,
-              RAT_sat2_up_urllc - self.W_sat_URLLC_up,
-              RAT_sat1_up_embb - self.W_sat_eMBB_up,
-              RAT_sat2_up_embb - self.W_sat_eMBB_up,
-              RAT_sat1_down_embb - self.W_sat_eMBB_down,
-              RAT_sat2_down_embb - self.W_sat_eMBB_down,
-            ])
+        CV = np.hstack(CV_terms)
         
         
         
@@ -675,8 +876,11 @@ class MyproblemInner:
     
     def run_origin(self):
 
-        population_inter = self.initialize_population_origin()            #  Big W_n  eq(51)  # NIND x D
-        population = population_inter * np.dot(np.ones((self.population_size,1)),self.outer_ass)  # NIND x D
+        if self.optimize_joint:
+            population = self.initialize_population_joint()  # NIND x (assoc_up + band)
+        else:
+            population_inter = self.initialize_population_origin()            #  Big W_n  eq(51)  # NIND x D
+            population = population_inter * np.dot(np.ones((self.population_size,1)),self.outer_ass)  # NIND x D
 
         fitness_best = 1000000
         CV_best = 1000000000000000
@@ -689,7 +893,14 @@ class MyproblemInner:
         CV_generation_full = np.zeros((self.generation,1))
         cost_urllc_generation_full = np.zeros((self.generation,1))
 
-        for _ in range(self.generation):  # Number of generations
+        def _scalar(x):
+            """把 numpy 标量/1元素数组转成 python 标量，避免 print 时把数组整段打印出来。"""
+            try:
+                return np.asarray(x).item()
+            except Exception:
+                return x
+
+        for gen in range(self.generation):  # Number of generations
             population_generation = np.zeros((self.generation,self.chromosome_length))
             fitness_generation = np.zeros((self.generation,1))
             CV_generation = np.zeros((self.generation,1))
@@ -699,10 +910,20 @@ class MyproblemInner:
 
 
 
-            donor_population = self.mutate(population)
-            trial_population = self.crossover(population, donor_population)
-            fitness_pop, cost_urllc_pop,CV_pop, CV_pha_pop,trans_delay_pop,queue_delay_pop = self.evalVars(population)
-            fitness_trial, cost_urllc_trail,CV_trial, CV_pha_trial,trans_delay_trial,queue_delay_trial = self.evalVars(trial_population)
+            if self.optimize_joint:
+                donor_population = self.mutate_joint(population)
+                trial_population = self.crossover_joint(population, donor_population)
+
+                _, _, pop_band = self._decode_joint(population)
+                _, _, trial_band = self._decode_joint(trial_population)
+
+                fitness_pop, cost_urllc_pop, CV_pop, CV_pha_pop, trans_delay_pop, queue_delay_pop = self.evalVars(pop_band)
+                fitness_trial, cost_urllc_trail, CV_trial, CV_pha_trial, trans_delay_trial, queue_delay_trial = self.evalVars(trial_band)
+            else:
+                donor_population = self.mutate(population)
+                trial_population = self.crossover(population, donor_population)
+                fitness_pop, cost_urllc_pop,CV_pop, CV_pha_pop,trans_delay_pop,queue_delay_pop = self.evalVars(population)
+                fitness_trial, cost_urllc_trail,CV_trial, CV_pha_trial,trans_delay_trial,queue_delay_trial = self.evalVars(trial_population)
             #  选出两个种群的最优解
             best_fitness,best_population,best_CV_pha,best_cost_urllc,best_trans,best_queue  = self.select(fitness_trial,trial_population,CV_pha_trial,cost_urllc_trail,trans_delay_trial,queue_delay_trial,
                                                                    fitness_pop,population,CV_pha_pop,cost_urllc_pop,trans_delay_pop,queue_delay_pop)
@@ -714,7 +935,12 @@ class MyproblemInner:
             best_fitness , best_population, best_CV_pha,best_cost_urllc,best_trans, best_queue = self.select_based_on_fitness(best_population, best_fitness,best_CV_pha,best_cost_urllc,best_trans,best_queue) 
             # population_local,selected_fitness = self.select_based_on_fitness(population, fitness) 
 
-            population_generation[_] =  best_population[0]   #记录了每一代的最优解
+            # 记录每一代的最优 allocation（保持与旧接口一致）
+            if self.optimize_joint:
+                _, _, best_band = self._decode_joint(best_population[[0], :])
+                population_generation[_] = best_band[0]
+            else:
+                population_generation[_] =  best_population[0]   #记录了每一代的最优解
             fitness_generation[_] = best_fitness[0]
             CV_generation[_] = best_CV_pha[0]
             cost_urllc_generation[_] = best_cost_urllc[0]
@@ -743,24 +969,34 @@ class MyproblemInner:
             
             # 记录全部的最优解
             if CV_best == 0:
-                fitness_generation_full[_] = best_fitness[0]
-                CV_generation_full[_] = best_CV_pha[0]
+                fitness_generation_full[gen] = best_fitness[0]
+                CV_generation_full[gen] = best_CV_pha[0]
 
             else:
                 
-                fitness_generation_full[_] = 0
-                CV_generation_full[_] = CV_generation_full[_]
+                fitness_generation_full[gen] = 0
+                CV_generation_full[gen] = CV_generation_full[gen]
 
 
 
 
             
-            print('Innergeneration{}|| CV{} ||  Cost{}  ||'.format(_,CV_best,fitness_best))
+            print('Innergeneration{}|| CV{} ||  Cost{}  ||'.format(gen, _scalar(CV_best), _scalar(fitness_best)))
 
 
 
 
-        return population_best,fitness_best,CV_best,cost_urllc_best,fitness_generation_full       # population_best: (chormlength,1) fitness_best: : (NIND,1) CV_best: value
+        # 若是 joint 模式：population_best 是 joint 染色体；但为了兼容旧接口，这里仍返回“best allocation”
+        if self.optimize_joint:
+            assoc_up_best, assoc_full_best, band_best = self._decode_joint(population_best.reshape(1, -1))
+            # 暴露最优 association 方便外部取用
+            self.best_assoc_up = assoc_up_best[0]
+            self.best_assoc_full = assoc_full_best[0]
+            population_best_out = band_best[0]
+        else:
+            population_best_out = population_best
+
+        return population_best_out,fitness_best,CV_best,cost_urllc_best,fitness_generation_full       # population_best_out: allocation 向量
     
     
 
@@ -820,12 +1056,13 @@ if __name__=="__main__":
         calculator = RATDistanceCalculator(urllc_num = k_urllc, embb_num = k_embb,RAT_num = RAT_num,time_ = seed,RAT_list = RAT_list)
         user_positions = calculator.generate_user_positions()    # （24，3）个用户的位置
         dk_m,channel = calculator.calculate_DistancesAndChennel(user_positions) # （24，6）个用户到各RAT的距离和信道增益
-        print(channel)
+        # print(channel)
         # ch = np.ones((k_embb+k_urllc,RAT_num))
 
-        Inner = MyproblemInner(k_urllc,k_embb,RAT_num,seed,outer,channel,num_list,RAT_list)
+        # optimize_joint=True: association + allocation 一起优化（association 为上行，卫星下行关联由上行卫星关联派生）
+        Inner = MyproblemInner(k_urllc, k_embb, RAT_num, seed, outer, channel, num_list, RAT_list, optimize_joint=True)
         population_best,fitness_best,CV_best,cost_urllc_best,fitness_generation_full  =  Inner.run_origin()
-        print(fitness_generation_full)
-        np.savetxt('Result/fitness_generation_best_seed{}.csv'.format(seed),fitness_generation_full,delimiter=',')
+        # print(fitness_generation_full)
+        np.savetxt('Result_DE/fitness_generation_best_seed{}.csv'.format(seed),fitness_generation_full,delimiter=',')
 
 
