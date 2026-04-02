@@ -82,7 +82,7 @@ class MyproblemInner:
         self.ch = ch   # channel ((eMBB+URLLC),RAT_num)
         self.population_size = 10  # inner individual
         self.generation = 500        # inner generation
-        self.embb = eMBB_num * RAT_num
+        self.embb = eMBB_num * self.RAT_num
         self.num_list = num_list   # [k1_u,k2_u,k3_u,k1_e,k2_e,k3_e]
         self.RAT_list = RAT_list   # [6G_BSs_num,Wi-Fi_BSs_num,Satellite_BSs_num]
 
@@ -100,8 +100,8 @@ class MyproblemInner:
 
 
         
-        self.W_6g_ = 4 * 1e5   
-        self.W_wifi_ = 1.5 * 1e5    
+        self.W_6g_ = 2 * 1e5   
+        self.W_wifi_ = 1 * 1e5    
 
         self.W_sat_eMBB_up = 3* 1e5    
         self.W_sat_URLLC_up = 3* 1e5    
@@ -608,7 +608,7 @@ class MyproblemInner:
 
 
         RAT_sat1_down_embb = np.sum(embb_band_matrix_down[:,:,[0]],axis=1) 
-        RAT_sat2_down_embb = np.sum(embb_band_matrix_down[:,:,[1]],axis=1) 
+        # RAT_sat2_down_embb = np.sum(embb_band_matrix_down[:,:,[1]],axis=1) 
 
 
  
@@ -627,7 +627,7 @@ class MyproblemInner:
               RAT_sat1_up_embb - self.W_sat_eMBB_up,
               RAT_sat2_up_embb - self.W_sat_eMBB_up,
               RAT_sat1_down_embb - self.W_sat_eMBB_down,
-              RAT_sat2_down_embb - self.W_sat_eMBB_down,
+            #   RAT_sat2_down_embb - self.W_sat_eMBB_down,
             ])
         
         
@@ -834,9 +834,9 @@ if __name__=="__main__":
     k_urllc = k1_u + k2_u + k3_u 
     num_list =[k1_u,k2_u,k3_u,k1_e,k2_e,k3_e]
 
-    SixG_BSs_num = 4
+    SixG_BSs_num = 2
     WiFi_BSs_num = 4
-    Satellite_BSs_num = 2
+    Satellite_BSs_num = 1
     RAT_num = SixG_BSs_num + WiFi_BSs_num + Satellite_BSs_num
     RAT_list = np.array([SixG_BSs_num,WiFi_BSs_num,Satellite_BSs_num,Satellite_BSs_num])
 

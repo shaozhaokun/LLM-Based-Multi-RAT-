@@ -25,7 +25,7 @@ class MyproblemInner:
         self.ch = ch   # channel ((eMBB+URLLC),RAT_num)
         self.population_size = 10  # inner individual
         self.generation = 500        # inner generation
-        self.embb = eMBB_num * RAT_num
+        self.embb = eMBB_num * self.RAT_num
         self.num_list = num_list   # [k1_u,k2_u,k3_u,k1_e,k2_e,k3_e]
         self.RAT_list = RAT_list   # [6G_BSs_num,Wi-Fi_BSs_num,Satellite_BSs_num]
         self.optimize_joint = optimize_joint
@@ -405,10 +405,46 @@ class MyproblemInner:
         if self.outer_ass is not None:
             mutated = mutated * (np.ones((N, 1)) @ self.outer_ass)
         return mutated
+
+    def de_like_mutate_band_joint(self, population_joint: np.ndarray, F: float = 0.3, rate: float = 0.3) -> np.ndarray:
+        """
+        在 GA 的 joint 模式里加入“类似 DE 的翻转/差分扰动”：
+        - 只对 allocation(band) 段做 DE 风格差分变异（a + F*(b-c) + 反射边界）
+        - association 段保持不变（仍由 GA 交叉/bit-flip 来探索）
+        - 以 rate 的概率对个体启用该扰动（避免太“硬”，保留 GA 随机性）
+        """
+        N = population_joint.shape[0]
+        if N == 0:
+            return population_joint
+
+        assoc_part = population_joint[:, : self.assoc_up_length]
+        band_part = population_joint[:, self.assoc_up_length :]
+
+        # 先按当前 association 做一次 mask，避免对 0-link 的带宽做无意义扰动
+        assoc_up = (assoc_part.reshape(N, self.K_total, self.RAT_num_up) > 0.5).astype(int)
+        assoc_up = self._repair_assoc_up(assoc_up)
+        assoc_full = self._build_assoc_full_from_up(assoc_up)
+
+        band = band_part.reshape(N, self.K_total, self.RAT_num) * assoc_full
+        band_flat = band.reshape(N, -1)
+
+        # 用现有的 self.mutate 做 DE-style donor（它带反射边界）
+        donor_flat = self.mutate(band_flat, F=F)
+
+        use = (np.random.rand(N) < rate).astype(float).reshape(N, 1)
+        band_new_flat = band_flat * (1.0 - use) + donor_flat * use
+
+        # clip + mask（保持与 association 一致）
+        lb_mat, ub_mat = self._band_bounds_matrix()
+        band_new = band_new_flat.reshape(N, self.K_total, self.RAT_num)
+        band_new = np.minimum(np.maximum(band_new, lb_mat.reshape(1, self.K_total, self.RAT_num)), ub_mat.reshape(1, self.K_total, self.RAT_num))
+        band_new = band_new * assoc_full
+
+        return np.hstack([assoc_up.reshape(N, -1).astype(float), band_new.reshape(N, -1).astype(float)])
     
     
 
-    def mutate(self, population, F=0.8):
+    def mutate(self, population, F=0.01):
         F_matrix_ = F * np.ones((self.population_size,1))    # N_2 x 1
         F_matrix =  F_matrix_ @ np.ones((1, self.chromosome_length))  # N_2 x D
         
@@ -445,7 +481,7 @@ class MyproblemInner:
         return donor_matrix
 
     
-    def crossover(self, population_, mutant_population, CR=0.7):
+    def crossover(self, population_, mutant_population, CR=0.5):
         
         trial_population = np.copy(population_)  
 
@@ -1007,6 +1043,8 @@ class MyproblemInner:
             if self.optimize_joint:
                 population_cross = self.crossover_joint(population)
                 trial_population = self.mutate_joint(population_cross)
+                # 追加：DE-style 的连续“翻转/扰动”用于带宽段（保留 GA 的 association 搜索）
+                trial_population = self.de_like_mutate_band_joint(trial_population, F=0.3, rate=0.3)
 
                 _, _, pop_band = self._decode_joint(population)
                 _, _, trial_band = self._decode_joint(trial_population)
@@ -1107,9 +1145,9 @@ if __name__=="__main__":
     k_urllc = k1_u + k2_u + k3_u 
     num_list =[k1_u,k2_u,k3_u,k1_e,k2_e,k3_e]
 
-    SixG_BSs_num = 4
+    SixG_BSs_num = 2
     WiFi_BSs_num = 4
-    Satellite_BSs_num = 2
+    Satellite_BSs_num = 1
     RAT_num = SixG_BSs_num + WiFi_BSs_num + Satellite_BSs_num
     RAT_list = np.array([SixG_BSs_num,WiFi_BSs_num,Satellite_BSs_num,Satellite_BSs_num])
 
@@ -1119,44 +1157,30 @@ if __name__=="__main__":
 
     # seed = np.random.seed(42)
     # outer= np.ones((k_urllc+k_embb,RAT_num))   # LLM (GPT),association  
-    for seed in range(10):
-        outer = np.array([[1,0,0,0, 0,0,0,0,0,0],[0,1,0,0,0,0,0,0,0,0],[0,0,1,0,0,0,0,0,0,0],[0,0,0,0,1,0,0,0,0,0],     # k1_u
-                        [0,0,0,0, 0,0,0,0,1,0],[0,0,0,0, 0,0,0,0,0,1],[0,0,0,0, 0,0,0,0,1,0],[1,0,0,0, 0,0,0,0,0,1],     # k2_u
-                        [0,1,0,0, 0,0,0,0,0,0],[0,0,0,0, 0,0,0,1,0,0],[0,1,0,0, 0,0,0,0,0,0],[0,0,0,1, 0,0,0,0,0,0],     # k3_u
-                        [1,0,0,0,1,0,0,0,0,0],[0,0,1,0,0,1,0,0,0,0],[0,0,0,1,0,0,1,0,0,0],[0,0,0,0,1,0,0,1,0,0],     # k1_e
-                        [0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,0,1],[0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,0,1],     # k2_e
-                        [0,1,0,0,0,1,0,0,1,0],[1,0,0,0,1,0,0,0,0,1],[1,0,0,0,0,0,0,1,1,0],[0,1,0,0,0,0,1,0,1,0]])     # k3_e
+    # for seed in range(10):
+    seed = 45
+    outer = np.array([[1,0, 0,0,0,0,0],[0,1,0,0,0,0,0],[0,1,0,0,0,0,0],[0,0,1,0,0,0,0],     # k1_u
+                    [0,0, 0,0,0,0,1],[0,0, 0,0,0,0,1],[0,0, 0,0,0,0,1],[0,0, 0,0,0,0,1],     # k2_u
+                    [0,1, 0,0,0,0,0],[0,0, 0,0,0,1,0],[0,1, 0,0,0,0,0],[1,0,0,0,0,0,0],     # k3_u
+                    [1,0,1,0,0,0,0],[1,0,0,1,0,0,0],[0,1,0,0,1,0,0],[0,0,1,0,0,1,0],     # k1_e
+                    [0,0,0,0,0,0,1],[0,0,0,0,0,0,1],[0,0,0,0,0,0,1],[0,0,0,0,0,0,1],     # k2_e
+                    [0,1,0,1,0,0,1],[1,0,1,0,0,0,1],[1,0,0,0,0,1,1],[0,1,0,0,1,0,1]])     # k3_e
+    
+    
+    
 
-        # outer = np.array([[0,1,0,0, 0,0,0,0,0,0],[0,1,0,0,0,0,0,0,0,0],[1,0,0,0,0,0,0,0,0,0],[0,0,1,0,0,0,0,0,0,0],     # k1_u
-        #                 [0,0,0,0, 0,0,0,0,1,0],[0,0,0,0, 0,0,0,0,0,1],[0,0,0,0, 0,0,0,0,1,0],[1,0,0,0, 0,0,0,0,1,0],     # k2_u
-        #                 [0,0,0,0, 0,0,0,0,0,1],[0,0,0,0, 0,0,0,0,0,1],[0,0,0,0, 0,0,0,0,1,0],[0,0,0,0, 0,0,0,0,1,0],     # k3_u
-        #                 [0,1,0,0,0,0,0,0,0,0],[0,0,1,0,0,0,0,0,0,0],[0,1,0,0,0,0,0,0,0,0],[1,0,0,0,0,0,0,0,0,0],     # k1_e
-        #                 [0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,1,0],     # k2_e
-        #                 [0,0,0,0,0,0,0,0,1,0],[0,0,0,0,1,0,0,0,1,0],[0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,1,0]])     # k3_e
+    outer = np.concatenate([outer, outer[:, SixG_BSs_num+WiFi_BSs_num:RAT_num]], axis=1)
 
+    calculator = RATDistanceCalculator(urllc_num = k_urllc, embb_num = k_embb,RAT_num = RAT_num,time_ = seed,RAT_list = RAT_list)
+    user_positions = calculator.generate_user_positions()    # （24，3）个用户的位置
+    dk_m,channel = calculator.calculate_DistancesAndChennel(user_positions) # （24，6）个用户到各RAT的距离和信道增益
+    # print(channel)
+    # ch = np.ones((k_embb+k_urllc,RAT_num))
 
-
-        # outer = np.array([[0,1,0,0, 0,0,0,0,0,0],[0,0,0,1,0,0,0,0,0,0],[1,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,1,0,0,0,0],     # k1_u
-        #                 [0,0,0,0, 0,0,0,0,1,0],[0,0,0,0, 0,0,0,0,0,1],[0,0,0,0, 0,0,0,0,1,0],[1,0,0,0, 0,0,0,0,0,1],     # k2_u
-        #                 [0,0,0,0, 0,0,0,0,1,0],[0,0,0,0, 0,0,0,0,0,1],[0,0,0,0, 0,0,0,0,1,0],[0,0,0,0, 0,0,0,0,1,0],     # k3_u
-        #                 [0,1,0,0,1,0,0,0,0,0],[0,0,1,0,0,1,0,0,0,0],[1,0,0,0,0,0,0,1,0,0],[0,0,0,1,0,0,1,0,0,0],     # k1_e
-        #                 [0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,0,1],[0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,0,1],     # k2_e
-        #                 [0,1,0,0,0,0,0,0,1,0],[0,0,1,0,0,0,0,0,0,1],[1,0,0,0,0,0,0,0,1,0],[0,0,0,1,0,0,0,0,0,1]])     # k3_e
-        
-        
-
-        outer = np.concatenate([outer, outer[:, SixG_BSs_num+WiFi_BSs_num:RAT_num]], axis=1)
-
-        calculator = RATDistanceCalculator(urllc_num = k_urllc, embb_num = k_embb,RAT_num = RAT_num,time_ = seed,RAT_list = RAT_list)
-        user_positions = calculator.generate_user_positions()    # （24，3）个用户的位置
-        dk_m,channel = calculator.calculate_DistancesAndChennel(user_positions) # （24，6）个用户到各RAT的距离和信道增益
-        # print(channel)
-        # ch = np.ones((k_embb+k_urllc,RAT_num))
-
-        # optimize_joint=True: association + allocation 一起优化（association 为上行，卫星下行关联由上行卫星关联派生）
-        Inner = MyproblemInner(k_urllc, k_embb, RAT_num, seed, outer, channel, num_list, RAT_list, optimize_joint=True)
-        population_best,fitness_best,CV_best,cost_urllc_best,fitness_generation_full  =  Inner.run_origin()
-        # print(fitness_generation_full)
-        np.savetxt('Result_GA/fitness_generation_best_seed{}.csv'.format(seed),fitness_generation_full,delimiter=',')
+    # optimize_joint=True: association + allocation 一起优化（association 为上行，卫星下行关联由上行卫星关联派生）
+    Inner = MyproblemInner(k_urllc, k_embb, RAT_num, seed, outer, channel, num_list, RAT_list, optimize_joint=True)
+    population_best,fitness_best,CV_best,cost_urllc_best,fitness_generation_full  =  Inner.run_origin()
+    # print(fitness_generation_full)
+    np.savetxt('Result_GA/fitness_generation_best_seed{}.csv'.format(seed),fitness_generation_full,delimiter=',')
 
 

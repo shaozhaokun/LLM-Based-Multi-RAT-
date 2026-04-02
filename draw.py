@@ -1,33 +1,59 @@
 
 import os
+import re
 import numpy as np
 import matplotlib.pyplot as plt
 
-# 画三条（Result / Result_DE / Result_GA）在同一张图上
-save_path = "Result/fitness_generation_best_compare.pdf"  # 不想保存就改成 None
-# title = "Cost Value"
+# 画“所有结果”在同一张图上：
+# - CSV: Result*/fitness_generation_best_seed{seed}.csv
+# - Multi-agent: Result_MultiAgent/simulation{seed}_multi_agent_BestValue.npy（画 best value）
+save_path = "Result/fitness_generation_best_compare_all.pdf"  # 不想保存就改成 None
 
 start_gen = 50
 end_gen = 500
 num_seed = 10
 show_std = False  # True: 画 ±1 std 阴影
 
-# 视觉参数（“图标/marker”和线条更大更清晰）
+# 若你想固定 y 轴范围，填 (ymin, ymax)；否则设为 None 自动缩放
+Y_LIM = None
+
+# 视觉参数
 LINEWIDTH = 2.0
 MARKERSIZE = 7
 LEGEND_FONTSIZE = 10
 LABEL_FONTSIZE = 11
 TICK_FONTSIZE = 10
 
-# 想要抽取/画出来的“代数点”（按原始 CSV 下标=代数取值）
+# 想要抽取/画出来的“代数点”（按原始数组下标=代数取值）
 sample_gens = np.array([50, 100, 200, 300, 400, 499], dtype=int)
 save_points_dir = "Result/points"  # 保存抽样点数组的目录
 
+
+def _load_curve(series_dir: str, seed: int) -> np.ndarray:
+    """
+    返回 1D curve：
+    - 对 CSV 系列：load fitness_generation_best_seed{seed}.csv
+    - 对 MultiAgent 系列：load simulation{seed}_multi_agent_BestValue.npy
+    """
+    if series_dir == "Result_MultiAgent":
+        npy_path = os.path.join(series_dir, f"simulation{seed}_multi_agent_BestValue.npy")
+        data = np.load(npy_path, allow_pickle=True)
+        data = np.asarray(data, dtype=float).reshape(-1)
+        return data
+    else:
+        csv_path = os.path.join(series_dir, f"fitness_generation_best_seed{seed}.csv")
+        data = np.loadtxt(csv_path, delimiter=",", dtype=float)
+        data = np.asarray(data, dtype=float).reshape(-1)
+        return data
+
+
 series = [
-    {"dir": "Result", "label": "LLM+DE"},
+    {"dir": "Result", "label": "Closest"},
     {"dir": "Result_DE", "label": "All_DE"},
     {"dir": "Result_GA", "label": "All_GA"},
-    {"dir": "Result_random", "label": "Random_DE"},
+    {"dir": "Result_random", "label": "Random"},
+    {"dir": "Result_Closest", "label": "LLM+DE"},
+    {"dir": "Result_MultiAgent", "label": "Multi_Agent"},
 ]
 
 plt.figure(figsize=(7, 5))
@@ -37,9 +63,7 @@ for s in series:
     curves = []
     points_seed = []  # (num_seed, len(sample_gens))
     for seed in range(num_seed):
-        csv_path = f"{s['dir']}/fitness_generation_best_seed{seed}.csv"
-        data = np.loadtxt(csv_path, delimiter=",", dtype=float)
-        data = np.asarray(data, dtype=float).reshape(-1)
+        data = _load_curve(s["dir"], seed)
 
         # 抽取离散点；越界则填 nan
         p = np.full(sample_gens.shape[0], np.nan, dtype=float)
@@ -76,7 +100,8 @@ for s in series:
 # plt.title(title)
 plt.xlabel("Inner Generation", fontsize=LABEL_FONTSIZE)
 plt.ylabel("Cost Value", fontsize=LABEL_FONTSIZE)
-plt.ylim(26, 31)
+if Y_LIM is not None:
+    plt.ylim(*Y_LIM)
 plt.xlim(50, 500)
 
 # plt.xlim(0,300)
@@ -106,7 +131,7 @@ for label, mean_points, std_points in points_summary:
         )
     else:
         plt.plot(sample_gens, mean_points, marker="o", markersize=MARKERSIZE, linewidth=LINEWIDTH, label=label)
-plt.xlabel("Inner Generation (sampled)", fontsize=LABEL_FONTSIZE)
+plt.xlabel("Inner Generation", fontsize=LABEL_FONTSIZE)
 plt.ylabel("Cost Value", fontsize=LABEL_FONTSIZE)
 plt.grid(True, alpha=0.3)
 plt.xticks(fontsize=TICK_FONTSIZE)
@@ -114,5 +139,5 @@ plt.xlim(50, 500)
 plt.yticks(fontsize=TICK_FONTSIZE)
 plt.legend(fontsize=LEGEND_FONTSIZE)
 plt.tight_layout()
-plt.savefig("Result/fitness_generation_sample_points_compare.pdf", dpi=200)
+plt.savefig("Result/fitness_generation_sample_points_compare_all.pdf", dpi=200)
 plt.show()

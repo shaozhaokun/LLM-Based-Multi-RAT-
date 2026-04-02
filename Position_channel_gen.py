@@ -64,8 +64,8 @@ class RATDistanceCalculator:
             [
                 # 前 4 个：6G BSs（RAT 0..3）
                 [-250.0,  250.0,    0.0],  # RAT 0: 6G BS 1
-                [ 250.0,  250.0,    0.0],  # RAT 1: 6G BS 2
-                [-250.0,  750.0,    0.0],  # RAT 2: 6G BS 3
+                # [ 250.0,  250.0,    0.0],  # RAT 1: 6G BS 2
+                # [-250.0,  750.0,    0.0],  # RAT 2: 6G BS 3
                 [ 250.0,  750.0,    0.0],  # RAT 3: 6G BS 4
 
                 # 后 4 个：Wi-Fi BSs（RAT 4..7）
@@ -81,11 +81,11 @@ class RATDistanceCalculator:
         # - 若 M3=1，只取第一颗
         # - 若 M3>2，可继续按需扩展这个列表或改成规则生成
         sat_height_1 = 550000.0  # SAT1高度 550 km
-        sat_height_2 = 600000.0  # SAT2高度 600 km（不同高度，确保距离差异明显）
+        # sat_height_2 = 600000.0  # SAT2高度 600 km（不同高度，确保距离差异明显）
         sat_positions_pool = np.array(
             [
                 [-500.0, 300.0, sat_height_1],        # SAT 1（较大的水平距离，高度550km）
-                [400.0, -200.0, sat_height_2],   # SAT 2（不同的水平位置和高度600km，确保距离差异明显）
+                # [400.0, -200.0, sat_height_2],   # SAT 2（不同的水平位置和高度600km，确保距离差异明显）
             ],
             dtype=float,
         )

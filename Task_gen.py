@@ -1,6 +1,7 @@
 
 import numpy as np
 import pandas as pd
+import os
 
 class TaskGenerator:
     def __init__(self, num_urllc_users, num_embb_users):
@@ -48,11 +49,16 @@ class TaskGenerator:
         urllc_df = pd.DataFrame(urllc_tasks, columns=["Data Size (bits)", "Deadline (s)", "CPU Cycles"])
         embb_df = pd.DataFrame(embb_tasks, columns=["Data Size (bits)", "Deadline (s)", "CPU Cycles"])
 
-        urllc_df.to_csv("Data/urllc_tasks_{}_.csv".format(self.num_urllc_users), index=False)
-        embb_df.to_csv("Data/embb_tasks_{}_.csv".format(self.num_embb_users), index=False)
+        os.makedirs("Data", exist_ok=True)
 
-        print("URLLC and eMBB tasks have been saved to 'urllc_tasks.csv' and 'embb_tasks.csv' respectively.")
+        # 统一使用新版命名（不带下划线结尾）
+        urllc_df.to_csv(f"Data/urllc_tasks_{self.num_urllc_users}.csv", index=False)
+        embb_df.to_csv(f"Data/embb_tasks_{self.num_embb_users}.csv", index=False)
 
-# 使用示例
-task_generator = TaskGenerator(num_urllc_users=12, num_embb_users=12)
-task_generator.save_tasks_to_csv()
+        print("URLLC/eMBB tasks saved to Data/urllc_tasks_{n}.csv and Data/embb_tasks_{n}.csv.")
+
+
+if __name__ == "__main__":
+    # 使用示例（仅脚本直接运行时才会执行；import 不会自动生成任务）
+    task_generator = TaskGenerator(num_urllc_users=12, num_embb_users=12)
+    task_generator.save_tasks_to_csv()

@@ -25,7 +25,7 @@ class MyproblemInner:
         self.ch = ch   # channel ((eMBB+URLLC),RAT_num)
         self.population_size = 10  # inner individual
         self.generation = 500        # inner generation
-        self.embb = eMBB_num * RAT_num
+        self.embb = eMBB_num * self.RAT_num
         self.num_list = num_list   # [k1_u,k2_u,k3_u,k1_e,k2_e,k3_e]
         self.RAT_list = RAT_list   # [6G_BSs_num,Wi-Fi_BSs_num,Satellite_BSs_num]
         self.optimize_joint = optimize_joint
@@ -314,7 +314,7 @@ class MyproblemInner:
     
     
 
-    def mutate(self, population, F=0.5):
+    def mutate(self, population, F=0.1):
         F_matrix_ = F * np.ones((self.population_size,1))    # N_2 x 1
         F_matrix =  F_matrix_ @ np.ones((1, self.chromosome_length))  # N_2 x D
         
@@ -938,12 +938,12 @@ class MyproblemInner:
             # 记录每一代的最优 allocation（保持与旧接口一致）
             if self.optimize_joint:
                 _, _, best_band = self._decode_joint(best_population[[0], :])
-                population_generation[_] = best_band[0]
+                population_generation[gen] = best_band[0]
             else:
-                population_generation[_] =  best_population[0]   #记录了每一代的最优解
-            fitness_generation[_] = best_fitness[0]
-            CV_generation[_] = best_CV_pha[0]
-            cost_urllc_generation[_] = best_cost_urllc[0]
+                population_generation[gen] = best_population[0]   # 记录了每一代的最优解
+            fitness_generation[gen] = best_fitness[0]
+            CV_generation[gen] = best_CV_pha[0]
+            cost_urllc_generation[gen] = best_cost_urllc[0]
 
 
 
@@ -1013,9 +1013,9 @@ if __name__=="__main__":
     k_urllc = k1_u + k2_u + k3_u 
     num_list =[k1_u,k2_u,k3_u,k1_e,k2_e,k3_e]
 
-    SixG_BSs_num = 4
+    SixG_BSs_num = 2
     WiFi_BSs_num = 4
-    Satellite_BSs_num = 2
+    Satellite_BSs_num = 1
     RAT_num = SixG_BSs_num + WiFi_BSs_num + Satellite_BSs_num
     RAT_list = np.array([SixG_BSs_num,WiFi_BSs_num,Satellite_BSs_num,Satellite_BSs_num])
 
@@ -1026,29 +1026,16 @@ if __name__=="__main__":
     # seed = np.random.seed(42)
     # outer= np.ones((k_urllc+k_embb,RAT_num))   # LLM (GPT),association  
     for seed in range(10):
-        outer = np.array([[1,0,0,0, 0,0,0,0,0,0],[0,1,0,0,0,0,0,0,0,0],[0,0,1,0,0,0,0,0,0,0],[0,0,0,0,1,0,0,0,0,0],     # k1_u
-                        [0,0,0,0, 0,0,0,0,1,0],[0,0,0,0, 0,0,0,0,0,1],[0,0,0,0, 0,0,0,0,1,0],[1,0,0,0, 0,0,0,0,0,1],     # k2_u
-                        [0,1,0,0, 0,0,0,0,0,0],[0,0,0,0, 0,0,0,1,0,0],[0,1,0,0, 0,0,0,0,0,0],[0,0,0,1, 0,0,0,0,0,0],     # k3_u
-                        [1,0,0,0,1,0,0,0,0,0],[0,0,1,0,0,1,0,0,0,0],[0,0,0,1,0,0,1,0,0,0],[0,0,0,0,1,0,0,1,0,0],     # k1_e
-                        [0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,0,1],[0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,0,1],     # k2_e
-                        [0,1,0,0,0,1,0,0,1,0],[1,0,0,0,1,0,0,0,0,1],[1,0,0,0,0,0,0,1,1,0],[0,1,0,0,0,0,1,0,1,0]])     # k3_e
 
-        # outer = np.array([[0,1,0,0, 0,0,0,0,0,0],[0,1,0,0,0,0,0,0,0,0],[1,0,0,0,0,0,0,0,0,0],[0,0,1,0,0,0,0,0,0,0],     # k1_u
-        #                 [0,0,0,0, 0,0,0,0,1,0],[0,0,0,0, 0,0,0,0,0,1],[0,0,0,0, 0,0,0,0,1,0],[1,0,0,0, 0,0,0,0,1,0],     # k2_u
-        #                 [0,0,0,0, 0,0,0,0,0,1],[0,0,0,0, 0,0,0,0,0,1],[0,0,0,0, 0,0,0,0,1,0],[0,0,0,0, 0,0,0,0,1,0],     # k3_u
-        #                 [0,1,0,0,0,0,0,0,0,0],[0,0,1,0,0,0,0,0,0,0],[0,1,0,0,0,0,0,0,0,0],[1,0,0,0,0,0,0,0,0,0],     # k1_e
-        #                 [0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,1,0],     # k2_e
-        #                 [0,0,0,0,0,0,0,0,1,0],[0,0,0,0,1,0,0,0,1,0],[0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,1,0]])     # k3_e
-
-
-
-        # outer = np.array([[0,1,0,0, 0,0,0,0,0,0],[0,0,0,1,0,0,0,0,0,0],[1,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,1,0,0,0,0],     # k1_u
-        #                 [0,0,0,0, 0,0,0,0,1,0],[0,0,0,0, 0,0,0,0,0,1],[0,0,0,0, 0,0,0,0,1,0],[1,0,0,0, 0,0,0,0,0,1],     # k2_u
-        #                 [0,0,0,0, 0,0,0,0,1,0],[0,0,0,0, 0,0,0,0,0,1],[0,0,0,0, 0,0,0,0,1,0],[0,0,0,0, 0,0,0,0,1,0],     # k3_u
-        #                 [0,1,0,0,1,0,0,0,0,0],[0,0,1,0,0,1,0,0,0,0],[1,0,0,0,0,0,0,1,0,0],[0,0,0,1,0,0,1,0,0,0],     # k1_e
-        #                 [0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,0,1],[0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,0,1],     # k2_e
-        #                 [0,1,0,0,0,0,0,0,1,0],[0,0,1,0,0,0,0,0,0,1],[1,0,0,0,0,0,0,0,1,0],[0,0,0,1,0,0,0,0,0,1]])     # k3_e
         
+        outer = np.array([[1,0, 0,0,0,0,0],[0,1,0,0,0,0,0],[0,1,0,0,0,0,0],[0,0,1,0,0,0,0],     # k1_u
+                        [0,0, 0,0,0,0,1],[0,0, 0,0,0,0,1],[0,0, 0,0,0,0,1],[0,0, 0,0,0,0,1],     # k2_u
+                        [0,1, 0,0,0,0,0],[0,0, 0,0,0,1,0],[0,1, 0,0,0,0,0],[1,0,0,0,0,0,0],     # k3_u
+                        [1,0,1,0,0,0,0],[1,0,0,1,0,0,0],[0,1,0,0,1,0,0],[0,0,1,0,0,1,0],     # k1_e
+                        [0,0,0,0,0,0,1],[0,0,0,0,0,0,1],[0,0,0,0,0,0,1],[0,0,0,0,0,0,1],     # k2_e
+                        [0,1,0,1,0,0,1],[1,0,1,0,0,0,1],[1,0,0,0,0,1,1],[0,1,0,0,1,0,1]])     # k3_e
+        
+
         
 
         outer = np.concatenate([outer, outer[:, SixG_BSs_num+WiFi_BSs_num:RAT_num]], axis=1)
