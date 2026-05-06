@@ -77,22 +77,25 @@ class MyproblemInner:
         self.outer_ass = self.outer_ass_.reshape(1, self.chromosome_length)
 
         # ---------- bandwidth caps (same as Bench_All_DE) ----------
-        self.W_6g = 50 * 1e6
-        self.W_wifi = 10 * 1e6
-
-        self.W_6g_ = 3* 1e5
-        self.W_wifi_ = 2* 1e5
-
-        self.W_sat_eMBB_up = 3 * 1e5
-        self.W_sat_URLLC_up = 3 * 1e5
-        self.W_sat_URLLC_down = 3 * 1e5
-        self.W_sat_eMBB_down = 3 * 1e5
+        # self.W_6g = 50 * 1e6
+        # self.W_wifi = 10 * 1e6
 
 
-        self.W_sat_eMBB_up_ = 8 * 1e4
-        self.W_sat_URLLC_up_ = 8 * 1e4
-        self.W_sat_URLLC_down_ = 8 * 1e4
-        self.W_sat_eMBB_down_ = 8 * 1e4
+
+
+        self.W_6g = 50 * 1e6     # 50 MHz
+        self.W_wifi = 10 * 1e6     # 10 MHz
+        self.W_sat_Up = 20 * 1e6     # 30 MHz   
+        self.W_sat_Down = 20 * 1e6     # 30 MHz 卫星上行和下行的带宽是分开的
+
+        self.W_6g_ = 5* 1e5
+        self.W_wifi_ = 5* 1e5
+
+
+        self.W_sat_eMBB_up_ = 3* 1e5
+        self.W_sat_URLLC_up_ = 3 * 1e5
+        self.W_sat_URLLC_down_ = 3 * 1e5
+        self.W_sat_eMBB_down_ = 3 * 1e5
 
         # URLLC downlink power per satellite
         self.L_sat_URLLC_down = 100.0
@@ -340,7 +343,7 @@ class MyproblemInner:
         satellite_up_indices = np.argmax(satellite_up_band > eps, axis=2)
         satellite_up_indices = np.where(satellite_mask, satellite_up_indices, 0)
 
-        B_down_u = self.W_sat_URLLC_down
+        B_down_u = self.W_sat_Down/2
         L_down_u = self.L_sat_URLLC_down
         denominator_down = (N0 * B_down_u) + eps
 
@@ -394,34 +397,63 @@ class MyproblemInner:
         deadline_urllc = np.tile(self.urllc_deadline, (Vars.shape[0], 1))
         deadline_embb = np.tile(self.embb_deadline, (Vars.shape[0], 1))
 
-        # ---------- constraints (CV) ----------
-        M1 = int(self.RAT_list[0])
-        M2 = int(self.RAT_list[1])
-        M3 = int(self.RAT_list[2])
-        CV_terms = []
+               # 带宽约束项 check
+        RAT_sixG1 = np.sum(embb_band_matrix_up[:,:,[0]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[0]],axis=1)
+        RAT_sixG2 = np.sum(embb_band_matrix_up[:,:,[1]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[1]],axis=1)
 
-        for m in range(M1):
-            rat_sum = np.sum(embb_band_matrix_up[:, :, [m]], axis=1) + np.sum(urllc_band_matrix_up[:, :, [m]], axis=1)
-            CV_terms.append(rat_sum - self.W_6g)
-        for m in range(M1, M1 + M2):
-            rat_sum = np.sum(embb_band_matrix_up[:, :, [m]], axis=1) + np.sum(urllc_band_matrix_up[:, :, [m]], axis=1)
-            CV_terms.append(rat_sum - self.W_wifi)
+        RAT_wifi1 = np.sum(embb_band_matrix_up[:,:,[2]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[2]],axis=1)
+        RAT_wifi2 = np.sum(embb_band_matrix_up[:,:,[3]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[3]],axis=1)
 
-        sat_up_start = M1 + M2
-        for s in range(M3):
-            m = sat_up_start + s
-            urllc_sum = np.sum(urllc_band_matrix_up[:, :, [m]], axis=1)
-            embb_sum = np.sum(embb_band_matrix_up[:, :, [m]], axis=1)
-            CV_terms.append(urllc_sum - self.W_sat_URLLC_up)
-            CV_terms.append(embb_sum - self.W_sat_eMBB_up)
+        RAT_wifi3 = np.sum(embb_band_matrix_up[:,:,[4]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[4]],axis=1)
+        RAT_wifi4 = np.sum(embb_band_matrix_up[:,:,[5]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[5]],axis=1)
+        
+        RAT_sat1_up_urllc =  np.sum(urllc_band_matrix_up[:,:,[6]],axis=1)
+        
+        RAT_sat1_up_embb = np.sum(embb_band_matrix_up[:,:,[6]],axis=1)
 
-        for s in range(M3):
-            embb_down_sum = np.sum(embb_band_matrix_down[:, :, [s]], axis=1)
-            CV_terms.append(embb_down_sum - self.W_sat_eMBB_down)
+        RAT_sat1_up = RAT_sat1_up_urllc + RAT_sat1_up_embb
 
-        CV = np.hstack(CV_terms)
+        RAT_sat2_up_urllc =  np.sum(urllc_band_matrix_up[:,:,[7]],axis=1)
+        
+        RAT_sat2_up_embb = np.sum(embb_band_matrix_up[:,:,[7]],axis=1)
+
+        RAT_sat2_up = RAT_sat2_up_urllc + RAT_sat2_up_embb
+
+
+
+
+        RAT_sat1_down_embb = np.sum(embb_band_matrix_down[:,:,[0]],axis=1) 
+        RAT_sat2_down_embb = np.sum(embb_band_matrix_down[:,:,[1]],axis=1) 
+
+
+ 
+
+
+        
+        # 采用可行性法则处理约束
+        CV = np.hstack(
+            [
+              RAT_sixG1 - self.W_6g,
+              RAT_sixG2 - self.W_6g,
+              RAT_wifi1 - self.W_wifi,
+              RAT_wifi2 - self.W_wifi,
+              RAT_wifi3 - self.W_wifi,
+              RAT_wifi4 - self.W_wifi,
+              RAT_sat1_up - self.W_sat_Up,
+              RAT_sat2_up-self.W_sat_Up,
+              RAT_sat1_down_embb - self.W_sat_Down/2,
+              RAT_sat2_down_embb - self.W_sat_Down/2,
+            ])
+        
+        
+        
+        pha = CV
         pha = np.where(CV < 0, 0, CV)
-        CV_pha = np.sum(pha, axis=1)
+
+        CV_pha = np.sum(pha,axis=1)   # NIND x 1
+
+        # ------------------------------------------------------------------------------------------------------------
+        max_delay_urllc = 2
 
         max_delay_eMBB = 2
         queue_time_embb, queue_time_urllc, trans_time_eMBB, trans_time_URLLC, total_delay_eMBB, total_delay_URLLC = queue_delay_calculation(

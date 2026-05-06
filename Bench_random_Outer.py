@@ -593,22 +593,34 @@ class MyproblemInner:
 
 
                 
-        # 带宽约束项 check
         RAT_sixG1 = np.sum(embb_band_matrix_up[:,:,[0]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[0]],axis=1)
         RAT_sixG2 = np.sum(embb_band_matrix_up[:,:,[1]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[1]],axis=1)
 
         RAT_wifi1 = np.sum(embb_band_matrix_up[:,:,[2]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[2]],axis=1)
         RAT_wifi2 = np.sum(embb_band_matrix_up[:,:,[3]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[3]],axis=1)
 
-        RAT_sat1_up_urllc =  np.sum(urllc_band_matrix_up[:,:,[4]],axis=1)
-        RAT_sat2_up_urllc =  np.sum(urllc_band_matrix_up[:,:,[5]],axis=1)
+        RAT_wifi3 = np.sum(embb_band_matrix_up[:,:,[4]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[4]],axis=1)
+        RAT_wifi4 = np.sum(embb_band_matrix_up[:,:,[5]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[5]],axis=1)
         
-        RAT_sat1_up_embb = np.sum(embb_band_matrix_up[:,:,[4]],axis=1)
-        RAT_sat2_up_embb = np.sum(embb_band_matrix_up[:,:,[5]],axis=1) 
+        RAT_sat1_up_urllc =  np.sum(urllc_band_matrix_up[:,:,[6]],axis=1)
+        
+        RAT_sat1_up_embb = np.sum(embb_band_matrix_up[:,:,[6]],axis=1)
+
+        RAT_sat1_up = RAT_sat1_up_urllc + RAT_sat1_up_embb
+
+
+
+        RAT_sat2_up_urllc =  np.sum(urllc_band_matrix_up[:,:,[7]],axis=1)
+        
+        RAT_sat2_up_embb = np.sum(embb_band_matrix_up[:,:,[7]],axis=1)
+
+        RAT_sat2_up = RAT_sat2_up_urllc + RAT_sat2_up_embb
+
+
 
 
         RAT_sat1_down_embb = np.sum(embb_band_matrix_down[:,:,[0]],axis=1) 
-        # RAT_sat2_down_embb = np.sum(embb_band_matrix_down[:,:,[1]],axis=1) 
+        RAT_sat2_down_embb = np.sum(embb_band_matrix_down[:,:,[1]],axis=1) 
 
 
  
@@ -622,21 +634,18 @@ class MyproblemInner:
               RAT_sixG2 - self.W_6g,
               RAT_wifi1 - self.W_wifi,
               RAT_wifi2 - self.W_wifi,
-              RAT_sat1_up_urllc - self.W_sat_URLLC_up,
-              RAT_sat2_up_urllc - self.W_sat_URLLC_up,
-              RAT_sat1_up_embb - self.W_sat_eMBB_up,
-              RAT_sat2_up_embb - self.W_sat_eMBB_up,
-              RAT_sat1_down_embb - self.W_sat_eMBB_down,
-            #   RAT_sat2_down_embb - self.W_sat_eMBB_down,
+              RAT_wifi3 - self.W_wifi,
+              RAT_wifi4 - self.W_wifi,
+              RAT_sat1_up - self.W_sat_Up,
+              RAT_sat2_up-self.W_sat_Up,
+              RAT_sat1_down_embb - self.W_sat_Down/2,
+              RAT_sat2_down_embb - self.W_sat_Down/2,
             ])
-        
-        
         
         pha = CV
         pha = np.where(CV < 0, 0, CV)
 
         CV_pha = np.sum(pha,axis=1)   # NIND x 1
-
         # ------------------------------------------------------------------------------------------------------------
         max_delay_urllc = 2
         max_delay_eMBB  = 2
@@ -824,19 +833,19 @@ class MyproblemInner:
 
 if __name__=="__main__":
 
-    k1_u = 4
-    k2_u = 4
-    k3_u = 4
-    k1_e = 4
-    k2_e = 4
-    k3_e = 4
+    k1_u = 10
+    k2_u = 10
+    k3_u = 10
+    k1_e = 10
+    k2_e = 10
+    k3_e = 10
     k_embb = k1_e + k2_e + k3_e 
     k_urllc = k1_u + k2_u + k3_u 
     num_list =[k1_u,k2_u,k3_u,k1_e,k2_e,k3_e]
 
     SixG_BSs_num = 2
     WiFi_BSs_num = 4
-    Satellite_BSs_num = 1
+    Satellite_BSs_num = 2
     RAT_num = SixG_BSs_num + WiFi_BSs_num + Satellite_BSs_num
     RAT_list = np.array([SixG_BSs_num,WiFi_BSs_num,Satellite_BSs_num,Satellite_BSs_num])
 

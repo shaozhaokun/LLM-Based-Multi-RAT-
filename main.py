@@ -1,10 +1,12 @@
 import numpy as np
 import random  
 import pandas as pd
+import os
 from Scheduling import queue_delay_calculation
 
 from Position_channel_gen import RATDistanceCalculator
 from WF import water_filling_power_allocation, satellite_downlink_power_allocation
+from build_outer_from_offloading_decision import build_outer_from_offloading_decision
 
 
 
@@ -38,18 +40,18 @@ class MyproblemInner:
 
         self.W_6g = 50 * 1e6     # 50 MHz
         self.W_wifi = 10 * 1e6     # 10 MHz
-        self.W_sat_Up = 30 * 1e6     # 30 MHz   
-        self.W_sat_Down = 30 * 1e6     # 30 MHz 卫星上行和下行的带宽是分开的
+        self.W_sat_Up = 20 * 1e6     # 30 MHz   
+        self.W_sat_Down = 20 * 1e6     # 30 MHz 卫星上行和下行的带宽是分开的
 
 
         
-        self.W_6g_ = 5 * 1e5   
-        self.W_wifi_ = 5 * 1e5    
+        self.W_6g_ = 6 * 1e5   
+        self.W_wifi_ = 6* 1e5    
 
-        self.W_sat_eMBB_up = 3* 1e5    
-        self.W_sat_URLLC_up = 3* 1e5    
-        self.W_sat_URLLC_down = 3* 1e5     # urllc 和 embb 进行分开分配
-        self.W_sat_eMBB_down = 3* 1e5
+        self.W_sat_eMBB_up = 6* 1e5    
+        self.W_sat_URLLC_up = 6* 1e5    
+        self.W_sat_URLLC_down = 6* 1e5     # urllc 和 embb 进行分开分配
+        self.W_sat_eMBB_down = 6* 1e5
         
         # URLLC下行功率 (每个卫星BS的URLLC下行传输功率，单位：W)
         self.L_sat_URLLC_down = 100.0  # 1 W，可根据实际模型调整    
@@ -439,7 +441,7 @@ class MyproblemInner:
         satellite_up_indices = np.where(satellite_mask, satellite_up_indices, 0)
         
         # 获取该卫星BS的URLLC下行带宽和功率
-        B_down_u = self.W_sat_URLLC_down  # 全部URLLC下行带宽
+        B_down_u = self.W_sat_Down/2  # 全部URLLC下行带宽
         L_down_u = self.L_sat_URLLC_down  # 全部URLLC下行功率
         denominator_down = (N0 * B_down_u) + eps
         
@@ -536,22 +538,36 @@ class MyproblemInner:
 
 
                 
-        # 带宽约束项 check
         RAT_sixG1 = np.sum(embb_band_matrix_up[:,:,[0]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[0]],axis=1)
         RAT_sixG2 = np.sum(embb_band_matrix_up[:,:,[1]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[1]],axis=1)
 
         RAT_wifi1 = np.sum(embb_band_matrix_up[:,:,[2]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[2]],axis=1)
         RAT_wifi2 = np.sum(embb_band_matrix_up[:,:,[3]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[3]],axis=1)
 
-        RAT_sat1_up_urllc =  np.sum(urllc_band_matrix_up[:,:,[4]],axis=1)
-        RAT_sat2_up_urllc =  np.sum(urllc_band_matrix_up[:,:,[5]],axis=1)
+        RAT_wifi3 = np.sum(embb_band_matrix_up[:,:,[4]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[4]],axis=1)
+        RAT_wifi4 = np.sum(embb_band_matrix_up[:,:,[5]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[5]],axis=1)
         
-        RAT_sat1_up_embb = np.sum(embb_band_matrix_up[:,:,[4]],axis=1)
-        RAT_sat2_up_embb = np.sum(embb_band_matrix_up[:,:,[5]],axis=1) 
+        RAT_sat1_up_urllc =  np.sum(urllc_band_matrix_up[:,:,[6]],axis=1)
+        
+        RAT_sat1_up_embb = np.sum(embb_band_matrix_up[:,:,[6]],axis=1)
+
+        RAT_sat1_up = RAT_sat1_up_urllc + RAT_sat1_up_embb
+
+
+
+       
+
+        RAT_sat2_up_urllc =  np.sum(urllc_band_matrix_up[:,:,[7]],axis=1)
+        
+        RAT_sat2_up_embb = np.sum(embb_band_matrix_up[:,:,[7]],axis=1)
+
+        RAT_sat2_up = RAT_sat2_up_urllc + RAT_sat2_up_embb
+
+
 
 
         RAT_sat1_down_embb = np.sum(embb_band_matrix_down[:,:,[0]],axis=1) 
-        # RAT_sat2_down_embb = np.sum(embb_band_matrix_down[:,:,[1]],axis=1) 
+        RAT_sat2_down_embb = np.sum(embb_band_matrix_down[:,:,[1]],axis=1) 
 
 
  
@@ -565,12 +581,12 @@ class MyproblemInner:
               RAT_sixG2 - self.W_6g,
               RAT_wifi1 - self.W_wifi,
               RAT_wifi2 - self.W_wifi,
-              RAT_sat1_up_urllc - self.W_sat_URLLC_up,
-              RAT_sat2_up_urllc - self.W_sat_URLLC_up,
-              RAT_sat1_up_embb - self.W_sat_eMBB_up,
-              RAT_sat2_up_embb - self.W_sat_eMBB_up,
-              RAT_sat1_down_embb - self.W_sat_eMBB_down,
-            #   RAT_sat2_down_embb - self.W_sat_eMBB_down,
+              RAT_wifi3 - self.W_wifi,
+              RAT_wifi4 - self.W_wifi,
+              RAT_sat1_up - self.W_sat_Up,
+              RAT_sat2_up-self.W_sat_Up,
+              RAT_sat1_down_embb - self.W_sat_Down/2,
+              RAT_sat2_down_embb - self.W_sat_Down/2,
             ])
         
         
@@ -579,7 +595,6 @@ class MyproblemInner:
         pha = np.where(CV < 0, 0, CV)
 
         CV_pha = np.sum(pha,axis=1)   # NIND x 1
-
         # ------------------------------------------------------------------------------------------------------------
         max_delay_urllc = 2
         max_delay_eMBB  = 2
@@ -767,19 +782,23 @@ class MyproblemInner:
 
 if __name__=="__main__":
 
-    k1_u = 4
-    k2_u = 4
-    k3_u = 4
-    k1_e = 4
-    k2_e = 4
-    k3_e = 4
+    # 保证所有相对路径（Data/ Channel/ Result/ Solution/）都相对于本文件所在目录
+    _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    os.chdir(_BASE_DIR)
+
+    k1_u = 20
+    k2_u = 20
+    k3_u = 20
+    k1_e = 20
+    k2_e = 20
+    k3_e = 20
     k_embb = k1_e + k2_e + k3_e 
     k_urllc = k1_u + k2_u + k3_u 
     num_list =[k1_u,k2_u,k3_u,k1_e,k2_e,k3_e]
 
     SixG_BSs_num = 2
     WiFi_BSs_num = 4
-    Satellite_BSs_num = 1
+    Satellite_BSs_num = 2
     RAT_num = SixG_BSs_num + WiFi_BSs_num + Satellite_BSs_num
     RAT_list = np.array([SixG_BSs_num,WiFi_BSs_num,Satellite_BSs_num,Satellite_BSs_num])
 
@@ -787,53 +806,61 @@ if __name__=="__main__":
 
     seed = 42
 
+    # calculator = RATDistanceCalculator(urllc_num = k_urllc, embb_num = k_embb,RAT_num = RAT_num,time_ = seed,RAT_list = RAT_list)
+    # user_positions = calculator.generate_user_positions()    
+    # dk_m,channel = calculator.calculate_DistancesAndChennel(user_positions) 
+    # os.makedirs("Data", exist_ok=True)
+    # np.save(os.path.join("Data", "channel.npy"), channel)
+    # np.save(os.path.join("Data", "user_position.npy"), user_positions)
+
+    # # 保存 channel 到 CSV：URLLC 一个文件，eMBB 一个文件，存到 Channel/ 目录
+    # # 说明：channel 是复数矩阵，CSV 里用 a±bj（科学计数法，2位）字符串保存（不丢失实/虚部）
+    # os.makedirs("Channel", exist_ok=True)
+    # def _complex_matrix_to_str(mat: np.ndarray) -> np.ndarray:
+    #     mat = np.asarray(mat)
+    #     re = mat.real
+    #     im = mat.imag
+    #     s = np.char.add(np.char.mod("%.2e", re), np.char.mod("%+.2e", im))
+    #     s = np.char.add(s, "j")
+    #     return s
+
+    # channel_urllc = channel[:k_urllc, :]
+    # channel_embb = channel[k_urllc:, :]
+    # np.savetxt("Channel/channel_URLLC.csv", _complex_matrix_to_str(channel_urllc), delimiter=",", fmt="%s")
+    # np.savetxt("Channel/channel_eMBB.csv", _complex_matrix_to_str(channel_embb), delimiter=",", fmt="%s")
+
+   
+    # 直接从 Solution/*_offloading_decision.csv 构造 outer（更简单，不需要先生成 outer_association.npy）
+    outer_solution = build_outer_from_offloading_decision(
+        urllc_csv_path=os.path.join("Solution", f"urllc_offloading_decision_{k_urllc}.csv"),
+        embb_csv_path=os.path.join("Solution", f"embb_offloading_decision_{k_embb}.csv"),
+        # 数量如果要改：去 build_outer_from_offloading_decision.py 里改默认值即可
+    )
+
+    channel = np.load(os.path.join("Data", "channel_{}_{}.npy".format(k_urllc, k_embb)))
+
+    expected_rows = k_urllc + k_embb
+    expected_cols = RAT_num + Satellite_BSs_num  # uplink + sat_down(=sat_up copy)
+    if outer_solution.shape != (expected_rows, expected_cols):
+        raise ValueError(
+            f"outer shape mismatch: got {outer_solution.shape}, expected {(expected_rows, expected_cols)}. "
+            f"Please check task counts (k_urllc/k_embb) and RAT counts (SixG/WiFi/Satellite)."
+        )
+
+
     # seed = np.random.seed(42)
     # outer= np.ones((k_urllc+k_embb,RAT_num))   # LLM (GPT),association  
     for seed in range(10):
-        # outer = np.array([[1,0,0,0, 0,0,0,0,0,0],[0,1,0,0,0,0,0,0,0,0],[0,0,1,0,0,0,0,0,0,0],[0,0,0,0,1,0,0,0,0,0],     # k1_u
-        #                 [0,0,0,0, 0,0,0,0,1,0],[0,0,0,0, 0,0,0,0,0,1],[0,0,0,0, 0,0,0,0,1,0],[1,0,0,0, 0,0,0,0,0,1],     # k2_u
-        #                 [0,1,0,0, 0,0,0,0,0,0],[0,0,0,0, 0,0,0,1,0,0],[0,1,0,0, 0,0,0,0,0,0],[0,0,0,1, 0,0,0,0,0,0],     # k3_u
-        #                 [1,0,0,0,1,0,0,0,0,0],[0,0,1,0,0,1,0,0,0,0],[0,0,0,1,0,0,1,0,0,0],[0,0,0,0,1,0,0,1,0,0],     # k1_e
-        #                 [0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,0,1],[0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,0,1],     # k2_e
-        #                 [0,1,0,0,0,1,0,0,1,0],[1,0,0,0,1,0,0,0,0,1],[1,0,0,0,0,0,0,1,1,0],[0,1,0,0,0,0,1,0,1,0]])     # k3_e
 
-        # outer = np.array([[0,1,0,0, 0,0,0,0,0,0],[0,1,0,0,0,0,0,0,0,0],[1,0,0,0,0,0,0,0,0,0],[0,0,1,0,0,0,0,0,0,0],     # k1_u
-        #                 [0,0,0,0, 0,0,0,0,1,0],[0,0,0,0, 0,0,0,0,0,1],[0,0,0,0, 0,0,0,0,1,0],[1,0,0,0, 0,0,0,0,1,0],     # k2_u
-        #                 [0,0,0,0, 0,0,0,0,0,1],[0,0,0,0, 0,0,0,0,0,1],[0,0,0,0, 0,0,0,0,1,0],[0,0,0,0, 0,0,0,0,1,0],     # k3_u
-        #                 [0,1,0,0,0,0,0,0,0,0],[0,0,1,0,0,0,0,0,0,0],[0,1,0,0,0,0,0,0,0,0],[1,0,0,0,0,0,0,0,0,0],     # k1_e
-        #                 [0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,1,0],     # k2_e
-        #                 [0,0,0,0,0,0,0,0,1,0],[0,0,0,0,1,0,0,0,1,0],[0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,1,0]])     # k3_e
-
-
-
-        # outer = np.array([[0,1,0,0, 0,0,0,0,0,0],[0,0,0,1,0,0,0,0,0,0],[1,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,1,0,0,0,0],     # k1_u
-        #                 [0,0,0,0, 0,0,0,0,1,0],[0,0,0,0, 0,0,0,0,0,1],[0,0,0,0, 0,0,0,0,1,0],[1,0,0,0, 0,0,0,0,0,1],     # k2_u
-        #                 [0,0,0,0, 0,0,0,0,1,0],[0,0,0,0, 0,0,0,0,0,1],[0,0,0,0, 0,0,0,0,1,0],[0,0,0,0, 0,0,0,0,1,0],     # k3_u
-        #                 [0,1,0,0,1,0,0,0,0,0],[0,0,1,0,0,1,0,0,0,0],[1,0,0,0,0,0,0,1,0,0],[0,0,0,1,0,0,1,0,0,0],     # k1_e
-        #                 [0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,0,1],[0,0,0,0,0,0,0,0,1,0],[0,0,0,0,0,0,0,0,0,1],     # k2_e
-        #                 [0,1,0,0,0,0,0,0,1,0],[0,0,1,0,0,0,0,0,0,1],[1,0,0,0,0,0,0,0,1,0],[0,0,0,1,0,0,0,0,0,1]])     # k3_e
-
-
-        outer = np.array([[1,0, 0,0,0,0,0],[0,1,0,0,0,0,0],[0,1,0,0,0,0,0],[0,0,1,0,0,0,0],     # k1_u
-                        [0,0, 0,0,0,0,1],[0,0, 0,0,0,0,1],[0,0, 0,0,0,0,1],[0,0, 0,0,0,0,1],     # k2_u
-                        [0,1, 0,0,0,0,0],[0,0, 0,0,0,1,0],[0,1, 0,0,0,0,0],[1,0,0,0,0,0,0],     # k3_u
-                        [1,0,1,0,0,0,0],[1,0,0,1,0,0,0],[0,1,0,0,1,0,0],[0,0,1,0,0,1,0],     # k1_e
-                        [0,0,0,0,0,0,1],[0,0,0,0,0,0,1],[0,0,0,0,0,0,1],[0,0,0,0,0,0,1],     # k2_e
-                        [0,1,0,1,0,0,1],[1,0,1,0,0,0,1],[1,0,0,0,0,1,1],[0,1,0,0,1,0,1]])     # k3_e
+        outer = outer_solution.copy()
         
-        
-
-        outer = np.concatenate([outer, outer[:, SixG_BSs_num+WiFi_BSs_num:RAT_num]], axis=1)
-
-        calculator = RATDistanceCalculator(urllc_num = k_urllc, embb_num = k_embb,RAT_num = RAT_num,time_ = seed,RAT_list = RAT_list)
-        user_positions = calculator.generate_user_positions()    # （24，3）个用户的位置
-        dk_m,channel = calculator.calculate_DistancesAndChennel(user_positions) # （24，6）个用户到各RAT的距离和信道增益
-        print(channel)
+    
         # ch = np.ones((k_embb+k_urllc,RAT_num))
 
         Inner = MyproblemInner(k_urllc,k_embb,RAT_num,seed,outer,channel,num_list,RAT_list)
         population_best,fitness_best,CV_best,cost_urllc_best,fitness_generation_full  =  Inner.run_origin()
         print(fitness_generation_full)
+        os.makedirs("Result", exist_ok=True)
         np.savetxt('Result/fitness_generation_best_seed{}.csv'.format(seed),fitness_generation_full,delimiter=',')
 
 

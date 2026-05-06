@@ -81,11 +81,11 @@ class RATDistanceCalculator:
         # - 若 M3=1，只取第一颗
         # - 若 M3>2，可继续按需扩展这个列表或改成规则生成
         sat_height_1 = 550000.0  # SAT1高度 550 km
-        # sat_height_2 = 600000.0  # SAT2高度 600 km（不同高度，确保距离差异明显）
+        sat_height_2 = 550000.0  # SAT2高度 600 km（不同高度，确保距离差异明显）
         sat_positions_pool = np.array(
             [
                 [-500.0, 300.0, sat_height_1],        # SAT 1（较大的水平距离，高度550km）
-                # [400.0, -200.0, sat_height_2],   # SAT 2（不同的水平位置和高度600km，确保距离差异明显）
+                [400.0, -200.0, sat_height_2],   # SAT 2（不同的水平位置和高度600km，确保距离差异明显）
             ],
             dtype=float,
         )
@@ -352,3 +352,73 @@ class RATDistanceCalculator:
             channel = np.concatenate([channel, ch_gw_cols], axis=1)
         
         return dk_m, channel
+
+
+
+def _complex_matrix_to_str(mat: np.ndarray) -> np.ndarray:
+    mat = np.asarray(mat)
+    re = mat.real
+    im = mat.imag
+    s = np.char.add(np.char.mod("%.2e", re), np.char.mod("%+.2e", im))
+    return np.char.add(s, "j")
+
+
+
+def main():
+    import os
+
+    k1_u = 20
+    k2_u = 20
+    k3_u = 20
+    k1_e = 20
+    k2_e = 20
+    k3_e = 20
+
+    k_urllc = k1_u + k2_u + k3_u
+    k_embb = k1_e + k2_e + k3_e
+
+
+    SixG_BSs_num = 2
+    WiFi_BSs_num = 4
+    Satellite_BSs_num = 1
+
+    RAT_num = SixG_BSs_num + WiFi_BSs_num + Satellite_BSs_num
+    RAT_list = np.array([SixG_BSs_num, WiFi_BSs_num, Satellite_BSs_num, Satellite_BSs_num])
+
+    seed = 0
+
+    calculator = RATDistanceCalculator(
+        urllc_num=k_urllc,
+        embb_num=k_embb,
+        RAT_num=RAT_num,
+        time_=seed,
+        RAT_list=RAT_list,
+    )
+
+    user_positions = calculator.generate_user_positions()
+    dk_m, channel = calculator.calculate_DistancesAndChennel(user_positions)
+
+    os.makedirs("Data", exist_ok=True)
+    os.makedirs("Channel", exist_ok=True)
+
+    # np.save(os.path.join("Data", "channel_{}_{}.npy".format(k_urllc, k_embb)), channel)
+    # np.save(os.path.join("Data", "user_position_{}_{}.npy".format(k_urllc, k_embb)), user_positions)
+    np.savetxt(
+        os.path.join("Channel", "channel_{}_{}.csv".format(k_urllc, k_embb)),
+        _complex_matrix_to_str(channel),
+        delimiter=",",
+        fmt="%s",
+    )
+
+    channel_urllc = channel[:k_urllc, :]
+    channel_embb = channel[k_urllc:, :]
+
+    np.savetxt("Channel/channel_URLLC_{}_{}.csv".format(k_urllc, k_embb), _complex_matrix_to_str(channel_urllc), delimiter=",", fmt="%s")
+    np.savetxt("Channel/channel_eMBB_{}_{}.csv".format(k_urllc, k_embb), _complex_matrix_to_str(channel_embb), delimiter=",", fmt="%s")
+
+    print("Channel files saved to Channel/.")
+    print("Data files saved to Data/.")
+
+
+if __name__ == "__main__":
+    main()

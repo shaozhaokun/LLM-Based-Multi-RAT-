@@ -7,6 +7,63 @@ from Position_channel_gen import RATDistanceCalculator
 from WF import water_filling_power_allocation, satellite_downlink_power_allocation
 
 
+def generate_random_outer(num_list, rat_num: int, sixg_num: int, wifi_num: int, sat_num: int, seed: int) -> np.ndarray:
+    """
+    随机生成 association(outer) 矩阵，带规则：
+    - URLLC：只能连接 1 个（one-hot）
+    - eMBB：可以连接多个（multi-hot），但至少 1 个
+    - 分区域接入：
+        K1(city)：只能连 terrestrial(6G+WiFi)
+        K2(ocean)：只能连 satellite
+        K3(hybrid)：都可以连
+
+    返回 outer: shape = (K_total, rat_num)
+    """
+    k1_u, k2_u, k3_u, k1_e, k2_e, k3_e = [int(x) for x in num_list]
+    k_urllc = k1_u + k2_u + k3_u
+    k_embb = k1_e + k2_e + k3_e
+    k_total = k_urllc + k_embb
+
+    assert rat_num == sixg_num + wifi_num + sat_num
+    terrestrial = np.arange(0, sixg_num + wifi_num, dtype=int)
+    satellite = np.arange(sixg_num + wifi_num, rat_num, dtype=int)
+
+    rng = np.random.default_rng(int(seed))
+    outer = np.zeros((k_total, rat_num), dtype=int)
+
+    def allowed_for_urllc(u_idx: int) -> np.ndarray:
+        if u_idx < k1_u:
+            return terrestrial
+        if u_idx < k1_u + k2_u:
+            return satellite
+        return np.arange(0, rat_num, dtype=int)
+
+    def allowed_for_embb(e_idx: int) -> np.ndarray:
+        if e_idx < k1_e:
+            return terrestrial
+        if e_idx < k1_e + k2_e:
+            return satellite
+        return np.arange(0, rat_num, dtype=int)
+
+    # URLLC one-hot
+    for u in range(k_urllc):
+        allowed = allowed_for_urllc(u)
+        pick = int(rng.choice(allowed))
+        outer[u, pick] = 1
+
+    # eMBB multi-hot (至少一个)
+    p = 0.1  # 每个允许 RAT 被选中的概率
+    for e in range(k_embb):
+        row = k_urllc + e
+        allowed = allowed_for_embb(e)
+        bits = (rng.random(allowed.size) < p).astype(int)
+        if bits.sum() == 0:
+            bits[int(rng.integers(0, allowed.size))] = 1
+        outer[row, allowed] = bits
+
+    return outer
+
+
 
 class MyproblemInner:
     def __init__(self, URLLC_num, eMBB_num, RAT_num_cure, seed, outer_ass=None, ch=None, num_list=None, RAT_list=None, optimize_joint: bool = False):
@@ -54,8 +111,8 @@ class MyproblemInner:
 
         self.W_6g = 50 * 1e6     # 50 MHz
         self.W_wifi = 10 * 1e6     # 10 MHz
-        self.W_sat_Up = 30 * 1e6     # 30 MHz   
-        self.W_sat_Down = 30 * 1e6     # 30 MHz 卫星上行和下行的带宽是分开的
+        self.W_sat_Up = 20 * 1e6     # 30 MHz   
+        self.W_sat_Down = 20 * 1e6     # 30 MHz 卫星上行和下行的带宽是分开的
 
 
         
@@ -646,7 +703,7 @@ class MyproblemInner:
         satellite_up_indices = np.where(satellite_mask, satellite_up_indices, 0)
         
         # 获取该卫星BS的URLLC下行带宽和功率
-        B_down_u = self.W_sat_URLLC_down  # 全部URLLC下行带宽
+        B_down_u = self.W_sat_Down/2  # 全部URLLC下行带宽
         L_down_u = self.L_sat_URLLC_down  # 全部URLLC下行功率
         denominator_down = (N0 * B_down_u) + eps
         
@@ -743,36 +800,56 @@ class MyproblemInner:
 
 
                 
-        # 带宽约束项 check（按 RAT_list 自动适配：6G(M1)、WiFi(M2)、SAT up(M3)、SAT down(M3)）
-        M1 = int(self.RAT_list[0])
-        M2 = int(self.RAT_list[1])
-        M3 = int(self.RAT_list[2])
+        
 
-        CV_terms = []
+                
+        RAT_sixG1 = np.sum(embb_band_matrix_up[:,:,[0]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[0]],axis=1)
+        RAT_sixG2 = np.sum(embb_band_matrix_up[:,:,[1]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[1]],axis=1)
 
-        # uplink terrestrial: 逐 RAT 检查
-        for m in range(M1):
-            rat_sum = np.sum(embb_band_matrix_up[:, :, [m]], axis=1) + np.sum(urllc_band_matrix_up[:, :, [m]], axis=1)
-            CV_terms.append(rat_sum - self.W_6g)
-        for m in range(M1, M1 + M2):
-            rat_sum = np.sum(embb_band_matrix_up[:, :, [m]], axis=1) + np.sum(urllc_band_matrix_up[:, :, [m]], axis=1)
-            CV_terms.append(rat_sum - self.W_wifi)
+        RAT_wifi1 = np.sum(embb_band_matrix_up[:,:,[2]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[2]],axis=1)
+        RAT_wifi2 = np.sum(embb_band_matrix_up[:,:,[3]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[3]],axis=1)
 
-        # uplink satellite: URLLC 与 eMBB 分开约束（每颗卫星各一条）
-        sat_up_start = M1 + M2
-        for s in range(M3):
-            m = sat_up_start + s
-            urllc_sum = np.sum(urllc_band_matrix_up[:, :, [m]], axis=1)
-            embb_sum = np.sum(embb_band_matrix_up[:, :, [m]], axis=1)
-            CV_terms.append(urllc_sum - self.W_sat_URLLC_up)
-            CV_terms.append(embb_sum - self.W_sat_eMBB_up)
+        RAT_wifi3 = np.sum(embb_band_matrix_up[:,:,[4]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[4]],axis=1)
+        RAT_wifi4 = np.sum(embb_band_matrix_up[:,:,[5]],axis=1) + np.sum(urllc_band_matrix_up[:,:,[5]],axis=1)
+        
+        RAT_sat1_up_urllc =  np.sum(urllc_band_matrix_up[:,:,[6]],axis=1)
+        
+        RAT_sat1_up_embb = np.sum(embb_band_matrix_up[:,:,[6]],axis=1)
 
-        # downlink satellite (eMBB): W_matrix_down 的列从 0..M3-1
-        for s in range(M3):
-            embb_down_sum = np.sum(embb_band_matrix_down[:, :, [s]], axis=1)
-            CV_terms.append(embb_down_sum - self.W_sat_eMBB_down)
+        RAT_sat1_up = RAT_sat1_up_urllc + RAT_sat1_up_embb
 
-        CV = np.hstack(CV_terms)
+
+        RAT_sat2_up_urllc =  np.sum(urllc_band_matrix_up[:,:,[7]],axis=1)
+        
+        RAT_sat2_up_embb = np.sum(embb_band_matrix_up[:,:,[7]],axis=1)
+
+        RAT_sat2_up = RAT_sat2_up_urllc + RAT_sat2_up_embb
+
+
+
+
+        RAT_sat1_down_embb = np.sum(embb_band_matrix_down[:,:,[0]],axis=1) 
+        RAT_sat2_down_embb = np.sum(embb_band_matrix_down[:,:,[1]],axis=1) 
+
+
+ 
+
+
+        
+        # 采用可行性法则处理约束
+        CV = np.hstack(
+            [
+              RAT_sixG1 - self.W_6g,
+              RAT_sixG2 - self.W_6g,
+              RAT_wifi1 - self.W_wifi,
+              RAT_wifi2 - self.W_wifi,
+              RAT_wifi3 - self.W_wifi,
+              RAT_wifi4 - self.W_wifi,
+              RAT_sat1_up - self.W_sat_Up,
+              RAT_sat2_up-self.W_sat_Up,
+              RAT_sat1_down_embb - self.W_sat_Down/2,
+              RAT_sat2_down_embb - self.W_sat_Down/2,
+            ])
         
         
         
@@ -1003,19 +1080,19 @@ class MyproblemInner:
 
 if __name__=="__main__":
 
-    k1_u = 4
-    k2_u = 4
-    k3_u = 4
-    k1_e = 4
-    k2_e = 4
-    k3_e = 4
+    k1_u = 10
+    k2_u = 10
+    k3_u = 10
+    k1_e = 10
+    k2_e = 10
+    k3_e = 10
     k_embb = k1_e + k2_e + k3_e 
     k_urllc = k1_u + k2_u + k3_u 
     num_list =[k1_u,k2_u,k3_u,k1_e,k2_e,k3_e]
 
     SixG_BSs_num = 2
     WiFi_BSs_num = 4
-    Satellite_BSs_num = 1
+    Satellite_BSs_num = 2
     RAT_num = SixG_BSs_num + WiFi_BSs_num + Satellite_BSs_num
     RAT_list = np.array([SixG_BSs_num,WiFi_BSs_num,Satellite_BSs_num,Satellite_BSs_num])
 
@@ -1027,13 +1104,22 @@ if __name__=="__main__":
     # outer= np.ones((k_urllc+k_embb,RAT_num))   # LLM (GPT),association  
     for seed in range(10):
 
+        outer = generate_random_outer(
+            num_list=num_list,
+            rat_num=RAT_num,
+            sixg_num=SixG_BSs_num,
+            wifi_num=WiFi_BSs_num,
+            sat_num=Satellite_BSs_num,
+            seed=seed,
+        )
         
-        outer = np.array([[1,0, 0,0,0,0,0],[0,1,0,0,0,0,0],[0,1,0,0,0,0,0],[0,0,1,0,0,0,0],     # k1_u
-                        [0,0, 0,0,0,0,1],[0,0, 0,0,0,0,1],[0,0, 0,0,0,0,1],[0,0, 0,0,0,0,1],     # k2_u
-                        [0,1, 0,0,0,0,0],[0,0, 0,0,0,1,0],[0,1, 0,0,0,0,0],[1,0,0,0,0,0,0],     # k3_u
-                        [1,0,1,0,0,0,0],[1,0,0,1,0,0,0],[0,1,0,0,1,0,0],[0,0,1,0,0,1,0],     # k1_e
-                        [0,0,0,0,0,0,1],[0,0,0,0,0,0,1],[0,0,0,0,0,0,1],[0,0,0,0,0,0,1],     # k2_e
-                        [0,1,0,1,0,0,1],[1,0,1,0,0,0,1],[1,0,0,0,0,1,1],[0,1,0,0,1,0,1]])     # k3_e
+        # outer = np.array([[1,0, 0,0,0,0,0,0],[0,1,0,0,0,0,0,0],[0,1,0,0,0,0,0,0],[0,0,1,0,0,0,0,0], [1,0, 0,0,0,0,0,0],[0,1,0,0,0,0,0,0],[0,1,0,0,0,0,0,0],[0,0,1,0,0,0,0,0],[0,1,0,0,0,0,0,0],[0,0,1,0,0,0,0,0] ,   # k1_u
+        #                 [0,0, 0,0,0,0,1,0],[0,0, 0,0,0,0,1,0],[0,0, 0,0,0,0,1,0],[0,0, 0,0,0,0,1,0], [0,0, 0,0,0,0,1,0],[0,0, 0,0,0,0,1,0],[0,0, 0,0,0,0,1,0],[0,0, 0,0,0,0,1,0],[0,0, 0,0,0,0,1,0],[0,0, 0,0,0,0,1,0],    # k2_u
+        #                 [0,1, 0,0,0,0,0,0],[0,0, 0,0,0,1,0,0],[0,1, 0,0,0,0,0,0],[1,0,0,0,0,0,0,0], [0,1, 0,0,0,0,0,0],[0,0, 0,0,0,1,0,0],[0,1, 0,0,0,0,0,0],[1,0,0,0,0,0,0,0], [0,1, 0,0,0,0,0,0],[1,0,0,0,0,0,0,0] ,  # k3_u
+        #                 [1,0,1,0,0,0,0,0],[1,0,0,1,0,0,0,0],[0,1,0,0,1,0,0,0],[0,0,1,0,0,1,0,0], [1,0,1,0,0,0,0,0],[1,0,0,1,0,0,0,0],[0,1,0,0,1,0,0,0],[0,0,1,0,0,1,0,0],  [0,1,0,0,1,0,0,0],[0,0,1,0,0,1,0,0] , # k1_e
+        #                 [0,0,0,0,0,0,1,0],[0,0,0,0,0,0,1,0],[0,0,0,0,0,0,1,0],[0,0,0,0,0,0,1,0], [0,0,0,0,0,0,1,0],[0,0,0,0,0,0,1,0],[0,0,0,0,0,0,1,0],[0,0,0,0,0,0,1,0],  [0,0,0,0,0,0,1,0],[0,0,0,0,0,0,1,0],  # k2_e
+        #                 [0,1,0,1,0,0,1,0],[1,0,1,0,0,0,1,0],[1,0,0,0,0,1,1,0],[0,1,0,0,1,0,1,0],[0,1,0,1,0,0,1,0],[1,0,1,0,0,0,1,0],[1,0,0,0,0,1,1,0],[0,1,0,0,1,0,1,0],[1,0,0,0,0,1,1,0],[0,1,0,0,1,0,1,0]])     # k3_e
+        
         
 
         

@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 # 画“所有结果”在同一张图上：
 # - CSV: Result*/fitness_generation_best_seed{seed}.csv
 # - Multi-agent: Result_MultiAgent/simulation{seed}_multi_agent_BestValue.npy（画 best value）
-save_path = "Result/fitness_generation_best_compare_all.pdf"  # 不想保存就改成 None
+save_path = "Result/fitness_generation_best_compare_all_2.pdf"  # 不想保存就改成 None
 
 start_gen = 50
 end_gen = 500
@@ -25,7 +25,7 @@ LABEL_FONTSIZE = 11
 TICK_FONTSIZE = 10
 
 # 想要抽取/画出来的“代数点”（按原始数组下标=代数取值）
-sample_gens = np.array([50, 100, 200, 300, 400, 499], dtype=int)
+sample_gens = np.array([50, 100,150, 200, 250, 300], dtype=int)
 save_points_dir = "Result/points"  # 保存抽样点数组的目录
 
 
@@ -48,11 +48,11 @@ def _load_curve(series_dir: str, seed: int) -> np.ndarray:
 
 
 series = [
-    {"dir": "Result", "label": "Closest"},
+    {"dir": "Result", "label": "LLM+DE"},
     {"dir": "Result_DE", "label": "All_DE"},
     {"dir": "Result_GA", "label": "All_GA"},
     {"dir": "Result_random", "label": "Random"},
-    {"dir": "Result_Closest", "label": "LLM+DE"},
+    {"dir": "Result_Closest", "label": "Closest"},
     {"dir": "Result_MultiAgent", "label": "Multi_Agent"},
 ]
 
@@ -102,7 +102,7 @@ plt.xlabel("Inner Generation", fontsize=LABEL_FONTSIZE)
 plt.ylabel("Cost Value", fontsize=LABEL_FONTSIZE)
 if Y_LIM is not None:
     plt.ylim(*Y_LIM)
-plt.xlim(50, 500)
+plt.xlim(50, 300)
 
 # plt.xlim(0,300)
 plt.grid(True, alpha=0.3)
@@ -130,12 +130,12 @@ for label, mean_points, std_points in points_summary:
             label=label,
         )
     else:
-        plt.plot(sample_gens, mean_points, marker="o", markersize=MARKERSIZE, linewidth=LINEWIDTH, label=label)
+        plt.plot(sample_gens, mean_points/30, marker="o", markersize=MARKERSIZE, linewidth=LINEWIDTH, label=label)
 plt.xlabel("Inner Generation", fontsize=LABEL_FONTSIZE)
 plt.ylabel("Cost Value", fontsize=LABEL_FONTSIZE)
 plt.grid(True, alpha=0.3)
 plt.xticks(fontsize=TICK_FONTSIZE)
-plt.xlim(50, 500)
+plt.xlim(50, 300)
 plt.yticks(fontsize=TICK_FONTSIZE)
 plt.legend(fontsize=LEGEND_FONTSIZE)
 plt.tight_layout()

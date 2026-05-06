@@ -36,10 +36,10 @@ class MyProblem:
         self.chromosome_length = (URLLC_num + eMBB_num) * self.RAT_num_total
         
        
-        self.W_5g_ = 7 * 1e5            # 200 eMBB 200 URLLC real
-        self.W_4g_ = 1.5 * 1e5    
-        self.W_6g_ = 2 * 1e6    
-        self.W_wifi_ = 3 * 1e5 
+        # self.W_5g_ = 7 * 1e5            # 200 eMBB 200 URLLC real
+        # self.W_4g_ = 1.5 * 1e5    
+        # self.W_6g_ = 2 * 1e6    
+        # self.W_wifi_ = 3 * 1e5 
 
 
         # self.W_5g_ = 4.5 * 1e5        # 350 eMBB 50 URLLC
@@ -665,19 +665,19 @@ class MyProblem:
 if __name__ == "__main__":
 
     # 用户数量（与 Bench_All_DE.py 的写法对齐）
-    k1_u = 4
-    k2_u = 4
-    k3_u = 4
-    k1_e = 4
-    k2_e = 4
-    k3_e = 4
+    k1_u = 10
+    k2_u = 10
+    k3_u = 10
+    k1_e = 10
+    k2_e = 10
+    k3_e = 10
     k_embb = k1_e + k2_e + k3_e
     k_urllc = k1_u + k2_u + k3_u
     num_list = [k1_u, k2_u, k3_u, k1_e, k2_e, k3_e]
     # 卫星模型 RAT 配置（与 Bench_All_DE/GA 一致）
     SixG_BSs_num = 2
     WiFi_BSs_num = 4
-    Satellite_BSs_num = 1
+    Satellite_BSs_num = 2
     RAT_num_cure = SixG_BSs_num + WiFi_BSs_num + Satellite_BSs_num  # uplink RAT 数（用于 Position_channel_gen）
     RAT_list = np.array([SixG_BSs_num, WiFi_BSs_num, Satellite_BSs_num, Satellite_BSs_num])
 
