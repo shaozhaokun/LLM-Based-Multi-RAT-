@@ -3,12 +3,9 @@ import random
 import pandas as pd
 import os
 import csv
-import hashlib
-import json
 from Scheduling import queue_delay_calculation
 
 from Position_channel_gen import RATDistanceCalculator
-from Task_gen import TaskGenerator
 from WF import water_filling_power_allocation, satellite_downlink_power_allocation
 from build_outer_from_offloading_decision import build_outer_from_offloading_decision
 
@@ -29,8 +26,8 @@ class MyproblemInner:
         self.seed = seed
         self.outer_ass_ = outer_ass  #  (,D) 
         self.ch = ch   # channel ((eMBB+URLLC),RAT_num)
-        self.population_size = 20  # inner individual
-        self.generation = 200        # inner generation
+        self.population_size = 10  # inner individual
+        self.generation = 500        # inner generation
         self.embb = eMBB_num * self.RAT_num
         self.num_list = num_list   # [k1_u,k2_u,k3_u,k1_e,k2_e,k3_e]
         self.RAT_list = RAT_list   # [6G_BSs_num,Wi-Fi_BSs_num,Satellite_BSs_num]
@@ -42,15 +39,15 @@ class MyproblemInner:
         self.outer_ass = self.outer_ass_.reshape(1,self.chromosome_length)
         self.outer_ass_reshape = self.outer_ass.reshape(-1,self.RAT_num) 
 
-        self.W_6g = 300 * 1e6     # 50 MHz
-        self.W_wifi = 160 * 1e6     # 10 MHz
+        self.W_6g = 50 * 1e6     # 50 MHz
+        self.W_wifi = 10 * 1e6     # 10 MHz
         self.W_sat_Up = 20 * 1e6     # 30 MHz   
         self.W_sat_Down = 20 * 1e6     # 30 MHz 卫星上行和下行的带宽是分开的
 
 
         
-        self.W_6g_ = 50 * 1e5   
-        self.W_wifi_ = 20* 1e5    
+        self.W_6g_ = 6 * 1e5   
+        self.W_wifi_ = 6* 1e5    
 
         self.W_sat_eMBB_up = 6* 1e5    
         self.W_sat_URLLC_up = 6* 1e5    
@@ -782,198 +779,31 @@ class MyproblemInner:
         return population_best,fitness_best,CV_best,cost_urllc_best,fitness_generation_full       # population_best: (chormlength,1) fitness_best: : (NIND,1) CV_best: value
     
     
+
+
 def _scalar(value):
     return float(np.asarray(value).reshape(-1)[0])
-
-
-def _association_key(association):
-    association = np.asarray(association, dtype=np.int8)
-    return hashlib.sha1(association.tobytes()).hexdigest()
-
-
-def _load_feedback_files(pool_dir):
-    feedback_path = os.path.join(pool_dir, "feedback_pools.json")
-    if not os.path.exists(feedback_path):
-        return [], [], {}, {"fitness": float("inf"), "iteration": None}
-
-    with open(feedback_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    positive_pool = data.get("positive_pool", [])
-    negative_pool = data.get("negative_pool", [])
-    visited_associations = data.get("visited_associations", {})
-    best_entry = min(
-        positive_pool,
-        key=lambda item: item.get("fitness", float("inf")),
-        default=None,
-    )
-    if best_entry is None:
-        global_best = {"fitness": float("inf"), "iteration": None}
-    else:
-        global_best = {
-            "fitness": float(best_entry.get("fitness", float("inf"))),
-            "iteration": best_entry.get("outer_iteration"),
-        }
-    return positive_pool, negative_pool, visited_associations, global_best
-
-
-def _save_feedback_snapshot(pool_dir, outer_iteration, association, bandwidth, fitness, cv, cost_urllc, pool_name, reason):
-    association_key = _association_key(association)
-    association_path = os.path.join(pool_dir, f"association_iteration{outer_iteration}.npy")
-    bandwidth_path = os.path.join(pool_dir, f"bandwidth_iteration{outer_iteration}.npy")
-    np.save(association_path, np.asarray(association, dtype=np.int8))
-    np.save(bandwidth_path, np.asarray(bandwidth, dtype=float))
-
-    return {
-        "outer_iteration": int(outer_iteration),
-        "association_key": association_key,
-        "association_path": association_path,
-        "bandwidth_path": bandwidth_path,
-        "fitness": _scalar(fitness),
-        "cv": _scalar(cv),
-        "cost_urllc": _scalar(cost_urllc),
-        "pool": pool_name,
-        "reason": reason,
-    }
-
-
-def _write_feedback_files(pool_dir, positive_pool, negative_pool, visited_associations):
-    feedback_path = os.path.join(pool_dir, "feedback_pools.json")
-    with open(feedback_path, "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "positive_pool": positive_pool,
-                "negative_pool": negative_pool,
-                "visited_associations": visited_associations,
-            },
-            f,
-            indent=2,
-        )
-
-    summary_path = os.path.join(pool_dir, "feedback_summary.csv")
-    rows = positive_pool + negative_pool
-    with open(summary_path, "w", newline="", encoding="utf-8") as f:
-        fieldnames = ["outer_iteration", "pool", "association_key", "fitness", "cv", "cost_urllc", "reason"]
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({name: row.get(name) for name in fieldnames})
-
-    return feedback_path, summary_path
-
-
-def _drop_iteration_entries(positive_pool, negative_pool, outer_iteration):
-    def keep_other_iteration(entry):
-        return entry.get("outer_iteration") != outer_iteration
-
-    return (
-        [entry for entry in positive_pool if keep_other_iteration(entry)],
-        [entry for entry in negative_pool if keep_other_iteration(entry)],
-    )
-
-
-def _rebuild_visited_associations(positive_pool, negative_pool):
-    visited_associations = {}
-    for entry in positive_pool + negative_pool:
-        association_key = entry.get("association_key")
-        if association_key:
-            visited_associations[association_key] = visited_associations.get(association_key, 0) + 1
-    return visited_associations
-
-
-def update_feedback_pools(
-    pool_dir,
-    outer_iteration,
-    association,
-    bandwidth,
-    fitness,
-    cv,
-    cost_urllc,
-    positive_pool,
-    negative_pool,
-    visited_associations,
-    global_best,
-):
-    association_key = _association_key(association)
-    visited_associations[association_key] = visited_associations.get(association_key, 0) + 1
-
-    fitness_value = _scalar(fitness)
-    cv_value = _scalar(cv)
-    if cv_value == 0.0 and fitness_value < global_best["fitness"]:
-        global_best["fitness"] = fitness_value
-        global_best["iteration"] = int(outer_iteration)
-        pool_name = "positive"
-        reason = "new_global_best"
-    elif cv_value == 0.0:
-        pool_name = "negative"
-        reason = "feasible_but_not_improved"
-    else:
-        pool_name = "negative"
-        reason = "constraint_violation"
-
-    entry = _save_feedback_snapshot(
-        pool_dir,
-        outer_iteration,
-        association,
-        bandwidth,
-        fitness,
-        cv,
-        cost_urllc,
-        pool_name,
-        reason,
-    )
-    if pool_name == "positive":
-        positive_pool.append(entry)
-    else:
-        negative_pool.append(entry)
-
-    return global_best
-
-
-def _write_fitness_result(pool_dir, outer_iteration, fitness_best, cv_best, cost_urllc_best, fitness_generation_full):
-    best_fitness_value = _scalar(fitness_best)
-    result = {
-        "outer_iteration": int(outer_iteration),
-        "best_fitness": best_fitness_value,
-        "cv": _scalar(cv_best),
-        "cost_urllc": _scalar(cost_urllc_best),
-    }
-
-    result_path = os.path.join(pool_dir, f"best_fitness_iteration{outer_iteration}.json")
-    with open(result_path, "w", encoding="utf-8") as f:
-        json.dump(result, f, indent=2)
-
-    np.savetxt(
-        os.path.join(pool_dir, f"fitness_iteration{outer_iteration}.csv"),
-        np.asarray(fitness_generation_full, dtype=float),
-        delimiter=",",
-    )
-    return result_path
 
 
 def _best_solution_metrics(inner_problem, population_best):
     best_population = np.asarray(population_best, dtype=float).reshape(1, -1)
     fitness, cost_urllc, _, cv_pha, _, delay_rate = inner_problem.evalVars(best_population)
-    average_embb_delay = _scalar(delay_rate[:, 0])
-    urllc_outage_ratio = _scalar(delay_rate[:, 1])
     total_cost = _scalar(fitness)
-    average_cost = total_cost / (inner_problem.URLLC_num + inner_problem.eMBB_num)
 
     return {
         "best_fitness": total_cost,
         "cv": _scalar(cv_pha),
         "cost_urllc": _scalar(cost_urllc),
-        "urllc_outage_ratio": urllc_outage_ratio,
-        "average_embb_delay": average_embb_delay,
-        "average_cost": average_cost,
+        "urllc_outage_ratio": _scalar(delay_rate[:, 1]),
+        "average_embb_delay": _scalar(delay_rate[:, 0]),
+        "average_cost": total_cost / (inner_problem.URLLC_num + inner_problem.eMBB_num),
     }
 
 
-def _append_outer_iteration_metrics(result_dir, outer_iteration, seed, metrics):
+def _append_no_feedback_metrics(result_dir, seed, metrics):
     os.makedirs(result_dir, exist_ok=True)
-    metrics_path = os.path.join(result_dir, "outer_iteration_best_metrics.csv")
+    metrics_path = os.path.join(result_dir, "no_feedback_best_metrics.csv")
     fieldnames = [
-        "outer_iteration",
         "seed",
         "urllc_outage_ratio",
         "average_embb_delay",
@@ -990,7 +820,6 @@ def _append_outer_iteration_metrics(result_dir, outer_iteration, seed, metrics):
             writer.writeheader()
         writer.writerow(
             {
-                "outer_iteration": int(outer_iteration),
                 "seed": int(seed),
                 **{name: metrics[name] for name in fieldnames if name in metrics},
             }
@@ -1003,47 +832,6 @@ def _first_existing_path(*paths):
         if os.path.exists(path):
             return path
     return paths[0]
-
-
-def _complex_matrix_to_str(mat):
-    mat = np.asarray(mat)
-    re = mat.real
-    im = mat.imag
-    s = np.char.add(np.char.mod("%.2e", re), np.char.mod("%+.2e", im))
-    return np.char.add(s, "j")
-
-
-def _load_or_generate_channel_csv(channel_csv_path, k_urllc, k_embb, rat_num, seed, rat_list):
-    if os.path.exists(channel_csv_path):
-        return np.loadtxt(channel_csv_path, delimiter=",", dtype=complex)
-
-    calculator = RATDistanceCalculator(
-        urllc_num=k_urllc,
-        embb_num=k_embb,
-        RAT_num=rat_num,
-        time_=seed,
-        RAT_list=rat_list,
-    )
-    user_positions = calculator.generate_user_positions()
-    _, channel = calculator.calculate_DistancesAndChennel(user_positions)
-
-    os.makedirs("Channel", exist_ok=True)
-    np.savetxt(channel_csv_path, _complex_matrix_to_str(channel), delimiter=",", fmt="%s")
-    np.savetxt(
-        os.path.join("Channel", "channel_URLLC_{}_{}.csv".format(k_urllc, k_embb)),
-        _complex_matrix_to_str(channel[:k_urllc, :]),
-        delimiter=",",
-        fmt="%s",
-    )
-    np.savetxt(
-        os.path.join("Channel", "channel_eMBB_{}_{}.csv".format(k_urllc, k_embb)),
-        _complex_matrix_to_str(channel[k_urllc:, :]),
-        delimiter=",",
-        fmt="%s",
-    )
-    os.makedirs("Data", exist_ok=True)
-    np.save(os.path.join("Data", "user_position_{}_{}.npy".format(k_urllc, k_embb)), user_positions)
-    return channel
 
 
 if __name__=="__main__":
@@ -1071,9 +859,29 @@ if __name__=="__main__":
 
 
     seed = 42
-    outer_iteration = 0
 
+    # calculator = RATDistanceCalculator(urllc_num = k_urllc, embb_num = k_embb,RAT_num = RAT_num,time_ = seed,RAT_list = RAT_list)
+    # user_positions = calculator.generate_user_positions()    
+    # dk_m,channel = calculator.calculate_DistancesAndChennel(user_positions) 
+    # os.makedirs("Data", exist_ok=True)
+    # np.save(os.path.join("Data", "channel.npy"), channel)
+    # np.save(os.path.join("Data", "user_position.npy"), user_positions)
 
+    # # 保存 channel 到 CSV：URLLC 一个文件，eMBB 一个文件，存到 Channel/ 目录
+    # # 说明：channel 是复数矩阵，CSV 里用 a±bj（科学计数法，2位）字符串保存（不丢失实/虚部）
+    # os.makedirs("Channel", exist_ok=True)
+    # def _complex_matrix_to_str(mat: np.ndarray) -> np.ndarray:
+    #     mat = np.asarray(mat)
+    #     re = mat.real
+    #     im = mat.imag
+    #     s = np.char.add(np.char.mod("%.2e", re), np.char.mod("%+.2e", im))
+    #     s = np.char.add(s, "j")
+    #     return s
+
+    # channel_urllc = channel[:k_urllc, :]
+    # channel_embb = channel[k_urllc:, :]
+    # np.savetxt("Channel/channel_URLLC.csv", _complex_matrix_to_str(channel_urllc), delimiter=",", fmt="%s")
+    # np.savetxt("Channel/channel_eMBB.csv", _complex_matrix_to_str(channel_embb), delimiter=",", fmt="%s")
 
    
     # 直接从 Solution/*_offloading_decision.csv 构造 outer（更简单，不需要先生成 outer_association.npy）
@@ -1089,19 +897,10 @@ if __name__=="__main__":
         # 数量如果要改：去 build_outer_from_offloading_decision.py 里改默认值即可
     )
 
-    urllc_task_path = os.path.join("Data", "urllc_tasks_{}.csv".format(k_urllc))
-    embb_task_path = os.path.join("Data", "embb_tasks_{}.csv".format(k_embb))
-    if not os.path.exists(urllc_task_path) or not os.path.exists(embb_task_path):
-        TaskGenerator(k_urllc, k_embb).save_tasks_to_csv()
-
-    channel_csv_path = os.path.join("Channel", "channel_{}_{}.csv".format(k_urllc, k_embb))
-    channel = _load_or_generate_channel_csv(
-        channel_csv_path,
-        k_urllc,
-        k_embb,
-        RAT_num,
-        seed,
-        RAT_list,
+    channel = np.loadtxt(
+        os.path.join("Channel", "channel_{}_{}.csv".format(k_urllc, k_embb)),
+        delimiter=",",
+        dtype=complex,
     )
 
     expected_rows = k_urllc + k_embb
@@ -1115,56 +914,24 @@ if __name__=="__main__":
 
     # seed = np.random.seed(42)
     # outer= np.ones((k_urllc+k_embb,RAT_num))   # LLM (GPT),association  
-    os.makedirs("Pool", exist_ok=True)
-    positive_pool, negative_pool, visited_associations, global_best_feedback = _load_feedback_files("Pool")
-    positive_pool, negative_pool = _drop_iteration_entries(positive_pool, negative_pool, outer_iteration)
-    visited_associations = _rebuild_visited_associations(positive_pool, negative_pool)
+    for seed in range(10):
 
-    outer = outer_solution.copy()
+        outer = outer_solution.copy()
         
     
-    # ch = np.ones((k_embb+k_urllc,RAT_num))
+        # ch = np.ones((k_embb+k_urllc,RAT_num))
 
-    Inner = MyproblemInner(k_urllc,k_embb,RAT_num,seed,outer,channel,num_list,RAT_list)
-    population_best,fitness_best,CV_best,cost_urllc_best,fitness_generation_full  =  Inner.run_origin()
-    print(fitness_generation_full)
-    fitness_result_path = _write_fitness_result(
-        "Pool",
-        outer_iteration,
-        fitness_best,
-        CV_best,
-        cost_urllc_best,
-        fitness_generation_full,
-    )
-    best_metrics = _best_solution_metrics(Inner, population_best)
-    metrics_result_path = _append_outer_iteration_metrics(
-        "Result",
-        outer_iteration,
-        seed,
-        best_metrics,
-    )
-    global_best_feedback = update_feedback_pools(
-        "Pool",
-        outer_iteration,
-        outer,
-        population_best,
-        fitness_best,
-        CV_best,
-        cost_urllc_best,
-        positive_pool,
-        negative_pool,
-        visited_associations,
-        global_best_feedback,
-    )
+        Inner = MyproblemInner(k_urllc,k_embb,RAT_num,seed,outer,channel,num_list,RAT_list)
+        population_best,fitness_best,CV_best,cost_urllc_best,fitness_generation_full  =  Inner.run_origin()
+        print(fitness_generation_full)
+        os.makedirs("Result", exist_ok=True)
+        np.savetxt('Result_NoFeedback/fitness_generation_best_seed{}.csv'.format(seed),fitness_generation_full,delimiter=',')
+        best_metrics = _best_solution_metrics(Inner, population_best)
+        metrics_result_path = _append_no_feedback_metrics(
+            "Result_NoFeedback",
+            seed,
+            best_metrics,
+        )
+        print(f"Saved no-feedback metrics to {metrics_result_path}")
 
-    feedback_path, summary_path = _write_feedback_files(
-        "Pool",
-        positive_pool,
-        negative_pool,
-        visited_associations,
-    )
-    print(f"Saved feedback pools to {feedback_path}")
-    print(f"Saved feedback summary to {summary_path}")
-    print(f"Saved best fitness value to {fitness_result_path}")
-    print(f"Saved outer iteration metrics to {metrics_result_path}")
 

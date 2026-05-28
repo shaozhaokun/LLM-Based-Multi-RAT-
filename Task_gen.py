@@ -11,8 +11,8 @@ class TaskGenerator:
 
         # URLLC parameters
         self.urllc_task_arrival_prob = 1  # 0.6
-        self.urllc_deadline_lower = 5 * 1e-5  # s (0.1ms) - 修正：至少要大于物理处理时间(~0.03ms)
-        self.urllc_deadline_upper = 10* 1e-5  # s (0.4ms) - 适当放宽上限
+        self.urllc_deadline_lower = 30 * 1e-4  # s (0.1ms) - 修正：至少要大于物理处理时间(~0.03ms)
+        self.urllc_deadline_upper = 50* 1e-4  # s (0.4ms) - 适当放宽上限
         self.urllc_data_size_lower = 100  # bytes
         self.urllc_data_size_upper = 400  # bytes
 
@@ -60,5 +60,5 @@ class TaskGenerator:
 
 if __name__ == "__main__":
     # 使用示例（仅脚本直接运行时才会执行；import 不会自动生成任务）
-    task_generator = TaskGenerator(num_urllc_users=12, num_embb_users=12)
+    task_generator = TaskGenerator(num_urllc_users=60, num_embb_users=60)
     task_generator.save_tasks_to_csv()

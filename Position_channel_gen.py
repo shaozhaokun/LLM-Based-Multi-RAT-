@@ -380,7 +380,7 @@ def main():
 
     SixG_BSs_num = 2
     WiFi_BSs_num = 4
-    Satellite_BSs_num = 1
+    Satellite_BSs_num = 2
 
     RAT_num = SixG_BSs_num + WiFi_BSs_num + Satellite_BSs_num
     RAT_list = np.array([SixG_BSs_num, WiFi_BSs_num, Satellite_BSs_num, Satellite_BSs_num])

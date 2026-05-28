@@ -1,0 +1,19 @@
+{
+  "positive_pool": [],
+  "negative_pool": [
+    {
+      "outer_iteration": 0,
+      "association_key": "fba1ac2170cccf48734de8ae53d14afe35f315d6",
+      "association_path": "Pool\\association_iteration0.npy",
+      "bandwidth_path": "Pool\\bandwidth_iteration0.npy",
+      "fitness": 31.075583864039842,
+      "cv": 0.0,
+      "cost_urllc": 22.0,
+      "pool": "negative",
+      "reason": "feasible_but_not_improved"
+    }
+  ],
+  "visited_associations": {
+    "fba1ac2170cccf48734de8ae53d14afe35f315d6": 1
+  }
+}
