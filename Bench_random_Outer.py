@@ -1,6 +1,8 @@
 import numpy as np
 import random  
 import pandas as pd
+import os
+import csv
 from Scheduling import queue_delay_calculation
 
 from Position_channel_gen import RATDistanceCalculator
@@ -81,7 +83,7 @@ class MyproblemInner:
         self.outer_ass_ = outer_ass  #  (,D) 
         self.ch = ch   # channel ((eMBB+URLLC),RAT_num)
         self.population_size = 10  # inner individual
-        self.generation = 500        # inner generation
+        self.generation = 1000        # inner generation
         self.embb = eMBB_num * self.RAT_num
         self.num_list = num_list   # [k1_u,k2_u,k3_u,k1_e,k2_e,k3_e]
         self.RAT_list = RAT_list   # [6G_BSs_num,Wi-Fi_BSs_num,Satellite_BSs_num]
@@ -93,15 +95,15 @@ class MyproblemInner:
         self.outer_ass = self.outer_ass_.reshape(1,self.chromosome_length)
         self.outer_ass_reshape = self.outer_ass.reshape(-1,self.RAT_num) 
 
-        self.W_6g = 50 * 1e6     # 50 MHz
-        self.W_wifi = 10 * 1e6     # 10 MHz
+        self.W_6g = 300 * 1e6     # 50 MHz
+        self.W_wifi = 160 * 1e6     # 10 MHz
         self.W_sat_Up = 30 * 1e6     # 30 MHz   
         self.W_sat_Down = 30 * 1e6     # 30 MHz 卫星上行和下行的带宽是分开的
 
 
         
-        self.W_6g_ = 2 * 1e5   
-        self.W_wifi_ = 1 * 1e5    
+        self.W_6g_ = 50 * 1e5   
+        self.W_wifi_ = 20 * 1e5    
 
         self.W_sat_eMBB_up = 3* 1e5    
         self.W_sat_URLLC_up = 3* 1e5    
@@ -826,19 +828,59 @@ class MyproblemInner:
 
 
 
+        self.best_metrics = {
+            "urllc_outage_ratio": _scalar(queue_best[1]),
+            "average_embb_delay": _scalar(queue_best[0]),
+            "average_cost": _scalar(fitness_best) / (self.URLLC_num + self.eMBB_num),
+            "best_fitness": _scalar(fitness_best),
+            "cv": _scalar(CV_best),
+            "cost_urllc": _scalar(cost_urllc_best),
+        }
+
         return population_best,fitness_best,CV_best,cost_urllc_best,fitness_generation_full       # population_best: (chormlength,1) fitness_best: : (NIND,1) CV_best: value
     
     
 
 
+def _scalar(value):
+    return float(np.asarray(value).reshape(-1)[0])
+
+
+def _append_random_metrics(result_dir, seed, metrics):
+    os.makedirs(result_dir, exist_ok=True)
+    metrics_path = os.path.join(result_dir, "random_best_metrics.csv")
+    fieldnames = [
+        "seed",
+        "urllc_outage_ratio",
+        "average_embb_delay",
+        "average_cost",
+        "best_fitness",
+        "cv",
+        "cost_urllc",
+    ]
+    write_header = not os.path.exists(metrics_path) or os.path.getsize(metrics_path) == 0
+
+    with open(metrics_path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if write_header:
+            writer.writeheader()
+        writer.writerow(
+            {
+                "seed": int(seed),
+                **{name: metrics[name] for name in fieldnames if name in metrics},
+            }
+        )
+    return metrics_path
+
+
 if __name__=="__main__":
 
-    k1_u = 10
-    k2_u = 10
-    k3_u = 10
-    k1_e = 10
-    k2_e = 10
-    k3_e = 10
+    k1_u = 20
+    k2_u = 20
+    k3_u = 20
+    k1_e = 20
+    k2_e = 20
+    k3_e = 20
     k_embb = k1_e + k2_e + k3_e 
     k_urllc = k1_u + k2_u + k3_u 
     num_list =[k1_u,k2_u,k3_u,k1_e,k2_e,k3_e]
@@ -886,9 +928,11 @@ if __name__=="__main__":
 
         outer = np.concatenate([outer, outer[:, SixG_BSs_num+WiFi_BSs_num:RAT_num]], axis=1)
 
-        calculator = RATDistanceCalculator(urllc_num = k_urllc, embb_num = k_embb,RAT_num = RAT_num,time_ = seed,RAT_list = RAT_list)
-        user_positions = calculator.generate_user_positions()    # （24，3）个用户的位置
-        dk_m,channel = calculator.calculate_DistancesAndChennel(user_positions) # （24，6）个用户到各RAT的距离和信道增益
+        channel = np.loadtxt(
+            os.path.join("Channel", "channel_{}_{}.csv".format(k_urllc, k_embb)),
+            delimiter=",",
+            dtype=complex,
+        )
         print(channel)
         # ch = np.ones((k_embb+k_urllc,RAT_num))
 
@@ -896,5 +940,6 @@ if __name__=="__main__":
         population_best,fitness_best,CV_best,cost_urllc_best,fitness_generation_full  =  Inner.run_origin()
         print(fitness_generation_full)
         np.savetxt('Result_random/fitness_generation_best_seed{}.csv'.format(seed),fitness_generation_full,delimiter=',')
+        _append_random_metrics("Result_random", seed, Inner.best_metrics)
 
 

@@ -60,5 +60,5 @@ class TaskGenerator:
 
 if __name__ == "__main__":
     # 使用示例（仅脚本直接运行时才会执行；import 不会自动生成任务）
-    task_generator = TaskGenerator(num_urllc_users=60, num_embb_users=60)
+    task_generator = TaskGenerator(num_urllc_users=180, num_embb_users=180)
     task_generator.save_tasks_to_csv()

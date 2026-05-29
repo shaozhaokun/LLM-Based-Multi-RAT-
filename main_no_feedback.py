@@ -26,8 +26,8 @@ class MyproblemInner:
         self.seed = seed
         self.outer_ass_ = outer_ass  #  (,D) 
         self.ch = ch   # channel ((eMBB+URLLC),RAT_num)
-        self.population_size = 10  # inner individual
-        self.generation = 500        # inner generation
+        self.population_size = 20  # inner individual
+        self.generation = 1000        # inner generation
         self.embb = eMBB_num * self.RAT_num
         self.num_list = num_list   # [k1_u,k2_u,k3_u,k1_e,k2_e,k3_e]
         self.RAT_list = RAT_list   # [6G_BSs_num,Wi-Fi_BSs_num,Satellite_BSs_num]
@@ -39,15 +39,15 @@ class MyproblemInner:
         self.outer_ass = self.outer_ass_.reshape(1,self.chromosome_length)
         self.outer_ass_reshape = self.outer_ass.reshape(-1,self.RAT_num) 
 
-        self.W_6g = 50 * 1e6     # 50 MHz
-        self.W_wifi = 10 * 1e6     # 10 MHz
+        self.W_6g = 300 * 1e6     # 50 MHz
+        self.W_wifi = 160 * 1e6     # 10 MHz
         self.W_sat_Up = 20 * 1e6     # 30 MHz   
         self.W_sat_Down = 20 * 1e6     # 30 MHz 卫星上行和下行的带宽是分开的
 
 
         
-        self.W_6g_ = 6 * 1e5   
-        self.W_wifi_ = 6* 1e5    
+        self.W_6g_ = 50 * 1e5   
+        self.W_wifi_ = 20 * 1e5    
 
         self.W_sat_eMBB_up = 6* 1e5    
         self.W_sat_URLLC_up = 6* 1e5    
@@ -110,7 +110,7 @@ class MyproblemInner:
     
     
 
-    def mutate(self, population, F=0.8):
+    def mutate(self, population, F=0.4):
         F_matrix_ = F * np.ones((self.population_size,1))    # N_2 x 1
         F_matrix =  F_matrix_ @ np.ones((1, self.chromosome_length))  # N_2 x D
         
@@ -860,37 +860,20 @@ if __name__=="__main__":
 
     seed = 42
 
-    # calculator = RATDistanceCalculator(urllc_num = k_urllc, embb_num = k_embb,RAT_num = RAT_num,time_ = seed,RAT_list = RAT_list)
-    # user_positions = calculator.generate_user_positions()    
-    # dk_m,channel = calculator.calculate_DistancesAndChennel(user_positions) 
-    # os.makedirs("Data", exist_ok=True)
-    # np.save(os.path.join("Data", "channel.npy"), channel)
-    # np.save(os.path.join("Data", "user_position.npy"), user_positions)
 
-    # # 保存 channel 到 CSV：URLLC 一个文件，eMBB 一个文件，存到 Channel/ 目录
-    # # 说明：channel 是复数矩阵，CSV 里用 a±bj（科学计数法，2位）字符串保存（不丢失实/虚部）
-    # os.makedirs("Channel", exist_ok=True)
-    # def _complex_matrix_to_str(mat: np.ndarray) -> np.ndarray:
-    #     mat = np.asarray(mat)
-    #     re = mat.real
-    #     im = mat.imag
-    #     s = np.char.add(np.char.mod("%.2e", re), np.char.mod("%+.2e", im))
-    #     s = np.char.add(s, "j")
-    #     return s
-
-    # channel_urllc = channel[:k_urllc, :]
-    # channel_embb = channel[k_urllc:, :]
-    # np.savetxt("Channel/channel_URLLC.csv", _complex_matrix_to_str(channel_urllc), delimiter=",", fmt="%s")
-    # np.savetxt("Channel/channel_eMBB.csv", _complex_matrix_to_str(channel_embb), delimiter=",", fmt="%s")
 
    
     # 直接从 Solution/*_offloading_decision.csv 构造 outer（更简单，不需要先生成 outer_association.npy）
     outer_solution = build_outer_from_offloading_decision(
         urllc_csv_path=_first_existing_path(
+            os.path.join("Solution", f"Outer_0", f"urllc_offloading_decision_{k_urllc}.csv"),
+            os.path.join("Solution", f"Outer_0", "urllc_offloading_decision.csv"),
             os.path.join("Solution", f"urllc_offloading_decision_{k_urllc}.csv"),
             os.path.join("Solution", "urllc_offloading_decision.csv"),
         ),
         embb_csv_path=_first_existing_path(
+            os.path.join("Solution", f"Outer_0", f"embb_offloading_decision_{k_embb}.csv"),
+            os.path.join("Solution", f"Outer_0", "embb_offloading_decision.csv"),
             os.path.join("Solution", f"embb_offloading_decision_{k_embb}.csv"),
             os.path.join("Solution", "embb_offloading_decision.csv"),
         ),

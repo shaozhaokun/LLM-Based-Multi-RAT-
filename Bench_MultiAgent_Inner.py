@@ -6,6 +6,10 @@ from Scheduling import queue_delay_calculation
 from WF import water_filling_power_allocation, satellite_downlink_power_allocation
 
 
+def _scalar(value):
+    return float(np.asarray(value).reshape(-1)[0])
+
+
 class MyproblemInner:
     """
     Multi-agent 的 inner（自包含卫星通信模型版本）：
@@ -83,13 +87,13 @@ class MyproblemInner:
 
 
 
-        self.W_6g = 50 * 1e6     # 50 MHz
-        self.W_wifi = 10 * 1e6     # 10 MHz
+        self.W_6g = 300 * 1e6     # 50 MHz
+        self.W_wifi = 160 * 1e6     # 10 MHz
         self.W_sat_Up = 20 * 1e6     # 30 MHz   
         self.W_sat_Down = 20 * 1e6     # 30 MHz 卫星上行和下行的带宽是分开的
 
-        self.W_6g_ = 5* 1e5
-        self.W_wifi_ = 5* 1e5
+        self.W_6g_ = 50* 1e5
+        self.W_wifi_ = 20* 1e5
 
 
         self.W_sat_eMBB_up_ = 3* 1e5
@@ -572,18 +576,23 @@ class MyproblemInner:
         if idv is not None and best_value_matrix is not None:
             best_value_matrix[idv, : self.generation] = fitness_generation_full.reshape(-1)[: self.generation]
 
-        try:
-            _, _, _, _, trans_delay, queue_delay = self.evalVars(np.asarray(population_best).reshape(1, -1))
-            trans_delay = np.asarray(trans_delay).reshape(-1)
-            queue_delay = np.asarray(queue_delay).reshape(-1)
-            if idv is not None and trans_delay_matrix is not None:
-                trans_delay_matrix[0, idv, : self.generation] = float(trans_delay[0])
-                trans_delay_matrix[1, idv, : self.generation] = float(trans_delay[1])
-            if idv is not None and queue_delay_matrix is not None:
-                queue_delay_matrix[0, idv, : self.generation] = float(queue_delay[0])
-                queue_delay_matrix[1, idv, : self.generation] = float(queue_delay[1])
-        except Exception:
-            pass
+        trans_best = np.asarray(trans_best).reshape(-1)
+        queue_best = np.asarray(queue_best).reshape(-1)
+        if idv is not None and trans_delay_matrix is not None:
+            trans_delay_matrix[0, idv, : self.generation] = float(trans_best[0])
+            trans_delay_matrix[1, idv, : self.generation] = float(trans_best[1])
+        if idv is not None and queue_delay_matrix is not None:
+            queue_delay_matrix[0, idv, : self.generation] = float(queue_best[0])
+            queue_delay_matrix[1, idv, : self.generation] = float(queue_best[1])
+
+        self.best_metrics = {
+            "urllc_outage_ratio": _scalar(queue_best[1]),
+            "average_embb_delay": _scalar(queue_best[0]),
+            "average_cost": _scalar(fitness_best) / (self.URLLC_num + self.eMBB_num),
+            "best_fitness": _scalar(fitness_best),
+            "cv": _scalar(CV_best),
+            "cost_urllc": _scalar(cost_urllc_best),
+        }
 
         return (
             population_best,

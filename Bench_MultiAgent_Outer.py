@@ -5,9 +5,41 @@ from Task_gen import TaskGenerator
 import random
 import time
 import os
+import csv
 
 
 #
+
+
+def _scalar(value):
+    return float(np.asarray(value).reshape(-1)[0])
+
+
+def _append_multiagent_metrics(result_dir, seed, metrics):
+    os.makedirs(result_dir, exist_ok=True)
+    metrics_path = os.path.join(result_dir, "multiagent_best_metrics.csv")
+    fieldnames = [
+        "seed",
+        "urllc_outage_ratio",
+        "average_embb_delay",
+        "average_cost",
+        "best_fitness",
+        "cv",
+        "cost_urllc",
+    ]
+    write_header = not os.path.exists(metrics_path) or os.path.getsize(metrics_path) == 0
+
+    with open(metrics_path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if write_header:
+            writer.writeheader()
+        writer.writerow(
+            {
+                "seed": int(seed),
+                **{name: metrics[name] for name in fieldnames if name in metrics},
+            }
+        )
+    return metrics_path
 
 class MyProblem:
     def __init__(self, URLLC_num, eMBB_num, RAT_num, seed, gen, channel, num_list=None, RAT_list=None, RAT_num_cure=None, embb_k: int = 2):
@@ -29,7 +61,7 @@ class MyProblem:
         self.seed = seed
         self.gen = gen
         self.chennel = channel
-        self.population_size = 5   # outer individual 
+        self.population_size = 10   # outer individual 
         self.outer_genneration = 10  # outer generation 
         self.inner_generation = 100
         # outer 染色体：association 掩码（与 inner allocation 向量同维度）
@@ -649,6 +681,15 @@ class MyProblem:
         np.save('Result_MultiAgent/simulation{}_multi_agent_Transtime.npy'.format(self.seed),best_trans_value)
         np.save('Result_MultiAgent/simulation{}_multi_agent_CosteMBB.npy'.format(self.seed),Cost_eMBB_value)
 
+        self.best_metrics = {
+            "urllc_outage_ratio": _scalar(best_queue_value[1, -1]),
+            "average_embb_delay": _scalar(best_queue_value[0, -1]),
+            "average_cost": _scalar(best_fitness[0]) / (self.URLLC_num + self.eMBB_num),
+            "best_fitness": _scalar(best_fitness[0]),
+            "cv": _scalar(best_CV_inner[0]),
+            "cost_urllc": _scalar(best_cost_urllc[0]),
+        }
+
 
         
         end_time = time.time()  # 记录结束时间
@@ -665,12 +706,12 @@ class MyProblem:
 if __name__ == "__main__":
 
     # 用户数量（与 Bench_All_DE.py 的写法对齐）
-    k1_u = 10
-    k2_u = 10
-    k3_u = 10
-    k1_e = 10
-    k2_e = 10
-    k3_e = 10
+    k1_u = 20
+    k2_u = 20
+    k3_u = 20
+    k1_e = 20
+    k2_e = 20
+    k3_e = 20
     k_embb = k1_e + k2_e + k3_e
     k_urllc = k1_u + k2_u + k3_u
     num_list = [k1_u, k2_u, k3_u, k1_e, k2_e, k3_e]
@@ -694,16 +735,11 @@ if __name__ == "__main__":
     
     # time_ = 99
 
-        # position and channel generate
-        calculator = RATDistanceCalculator(
-            urllc_num=k_urllc,
-            embb_num=k_embb,
-            RAT_num=RAT_num_cure,
-            time_=time_,
-            RAT_list=RAT_list,
+        channel = np.loadtxt(
+            os.path.join("Channel", "channel_{}_{}.csv".format(k_urllc, k_embb)),
+            delimiter=",",
+            dtype=complex,
         )
-        user_positions = calculator.generate_user_positions()
-        dk_m,channel = calculator.calculate_DistancesAndChennel(user_positions)
 
         # Example usage
         problem = MyProblem(
@@ -719,3 +755,4 @@ if __name__ == "__main__":
             embb_k=3,
         )
         final_population = problem.run_main()
+        _append_multiagent_metrics("Result_MultiAgent", time_, problem.best_metrics)

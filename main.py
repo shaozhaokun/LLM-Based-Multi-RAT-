@@ -1079,10 +1079,14 @@ if __name__=="__main__":
     # 直接从 Solution/*_offloading_decision.csv 构造 outer（更简单，不需要先生成 outer_association.npy）
     outer_solution = build_outer_from_offloading_decision(
         urllc_csv_path=_first_existing_path(
+            os.path.join("Solution", f"Outer_{outer_iteration}", f"urllc_offloading_decision_{k_urllc}.csv"),
+            os.path.join("Solution", f"Outer_{outer_iteration}", "urllc_offloading_decision.csv"),
             os.path.join("Solution", f"urllc_offloading_decision_{k_urllc}.csv"),
             os.path.join("Solution", "urllc_offloading_decision.csv"),
         ),
         embb_csv_path=_first_existing_path(
+            os.path.join("Solution", f"Outer_{outer_iteration}", f"embb_offloading_decision_{k_embb}.csv"),
+            os.path.join("Solution", f"Outer_{outer_iteration}", "embb_offloading_decision.csv"),
             os.path.join("Solution", f"embb_offloading_decision_{k_embb}.csv"),
             os.path.join("Solution", "embb_offloading_decision.csv"),
         ),

@@ -367,12 +367,12 @@ def _complex_matrix_to_str(mat: np.ndarray) -> np.ndarray:
 def main():
     import os
 
-    k1_u = 20
-    k2_u = 20
-    k3_u = 20
-    k1_e = 20
-    k2_e = 20
-    k3_e = 20
+    k1_u = 60
+    k2_u = 60
+    k3_u = 60
+    k1_e = 60
+    k2_e = 60
+    k3_e = 60
 
     k_urllc = k1_u + k2_u + k3_u
     k_embb = k1_e + k2_e + k3_e

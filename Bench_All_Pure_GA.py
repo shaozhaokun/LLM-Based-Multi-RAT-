@@ -1266,7 +1266,7 @@ if __name__=="__main__":
 
     # seed = np.random.seed(42)
     # outer= np.ones((k_urllc+k_embb,RAT_num))   # LLM (GPT),association  
-    for seed in range(10,20):
+    for seed in range(10  ):
     # seed = 45
         outer = generate_random_outer(
             num_list=num_list,

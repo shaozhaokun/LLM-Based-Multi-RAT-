@@ -50,7 +50,7 @@ class MyproblemInner:
 
         
         self.W_6g_ = 50 * 1e5   
-        self.W_wifi_ = 20* 1e5    
+        self.W_wifi_ = 25* 1e5    
 
         self.W_sat_eMBB_up = 6* 1e5    
         self.W_sat_URLLC_up = 6* 1e5    
@@ -150,7 +150,7 @@ class MyproblemInner:
         return donor_matrix
 
     
-    def crossover(self, population_, mutant_population, CR=0.5):
+    def crossover(self, population_, mutant_population, CR=0.7):
         
         trial_population = np.copy(population_)  
 
@@ -196,7 +196,7 @@ class MyproblemInner:
         return best_fitness, best_population,  best_CV_pha,cost_urllc_pop, trans_pop, queue_pop
 
 
-    def evalVars(self, X):
+    def evalVars(self, X, return_details=False):
 
         # 1. 计算URLLC上行速率
         # 2. 计算eMBB上行速率
@@ -467,6 +467,15 @@ class MyproblemInner:
         # 如果同时关联terrestrial和satellite，优先使用terrestrial（有线回传更稳定）
         satellite_only_mask = satellite_mask & (~terrestrial_mask)
         rk_m_urllc_down_sum = np.where(satellite_only_mask, rk_sat_down, rk_m_urllc_down_sum)
+
+        r_second_urllc_by_rat = np.zeros((NIND, self.URLLC_num, self.RAT_num_up), dtype=float)
+        r_second_urllc_by_rat[:, :, :self.RAT_num_terrestrial] = self.C_vec[:self.RAT_num_terrestrial].reshape(1, 1, -1)
+        for sat_idx in range(M3):
+            h_sat = sat_to_gateway_channel[sat_idx]
+            sat_rate = B_down_u * np.log2(1 + (L_down_u * abs(h_sat) ** 2) / denominator_down)
+            r_second_urllc_by_rat[:, :, self.RAT_num_terrestrial + sat_idx] = sat_rate
+        r_second_urllc_by_rat = r_second_urllc_by_rat * binary_matrix_urllc_up
+        R_e2e_urllc = np.minimum(rk_m_urllc, r_second_urllc_by_rat)
         
         # ========== 步骤2: 确定任务到达时间 ==========
         # 到达时间 = 上行传输完成时间（计算在gateway，所以到达时间就是上行传输完成时间）
@@ -627,6 +636,147 @@ class MyproblemInner:
         cost = cost_embb + cost_urllc
         
         f = cost
+
+        if return_details:
+            idx = 0
+            rat_names = (
+                [f"6G_{i + 1}" for i in range(self.RAT_list[0])]
+                + [f"WiFi_{i + 1}" for i in range(self.RAT_list[1])]
+                + [f"Satellite_{i + 1}" for i in range(self.RAT_list[2])]
+            )
+            rat_types = (
+                ["6G"] * self.RAT_list[0]
+                + ["WiFi"] * self.RAT_list[1]
+                + ["Satellite"] * self.RAT_list[2]
+            )
+
+            link_rows = []
+            for u in range(self.URLLC_num):
+                for rat in range(self.RAT_num_up):
+                    link_rows.append(
+                        {
+                            "user_id": int(u),
+                            "user_type": "URLLC",
+                            "rat_id": int(rat),
+                            "rat_name": rat_names[rat],
+                            "rat_type": rat_types[rat],
+                            "selected": int(binary_matrix_urllc_up[idx, u, rat] > 0),
+                            "uplink_rate": float(rk_m_urllc[idx, u, rat]),
+                            "downlink_rate": float(r_second_urllc_by_rat[idx, u, rat]),
+                            "effective_e2e_rate": float(R_e2e_urllc[idx, u, rat]),
+                        }
+                    )
+            for e in range(self.eMBB_num):
+                user_id = self.URLLC_num + e
+                for rat in range(self.RAT_num_up):
+                    link_rows.append(
+                        {
+                            "user_id": int(user_id),
+                            "user_type": "eMBB",
+                            "rat_id": int(rat),
+                            "rat_name": rat_names[rat],
+                            "rat_type": rat_types[rat],
+                            "selected": int(binary_matrix_embb_up[idx, e, rat] > 0),
+                            "uplink_rate": float(r_first_embb[idx, e, rat]),
+                            "downlink_rate": float(r_second_embb[idx, e, rat]),
+                            "effective_e2e_rate": float(R_e2e_embb[idx, e, rat]),
+                        }
+                    )
+
+            rat_rows = []
+            up_capacity = (
+                [self.W_6g] * self.RAT_list[0]
+                + [self.W_wifi] * self.RAT_list[1]
+                + [self.W_sat_Up] * self.RAT_list[2]
+            )
+            for rat in range(self.RAT_num_up):
+                used_urllc = float(np.sum(urllc_band_matrix_up[idx, :, rat]))
+                used_embb = float(np.sum(embb_band_matrix_up[idx, :, rat]))
+                capacity = float(up_capacity[rat])
+                rat_rows.append(
+                    {
+                        "rat_id": int(rat),
+                        "rat_name": rat_names[rat],
+                        "rat_type": rat_types[rat],
+                        "link_direction": "uplink",
+                        "used_bandwidth_total": used_urllc + used_embb,
+                        "used_bandwidth_urllc": used_urllc,
+                        "used_bandwidth_embb": used_embb,
+                        "capacity": capacity,
+                        "utilization_total": (used_urllc + used_embb) / capacity if capacity > 0 else 0.0,
+                        "utilization_urllc": used_urllc / capacity if capacity > 0 else 0.0,
+                        "utilization_embb": used_embb / capacity if capacity > 0 else 0.0,
+                        "connected_urllc_count": int(np.sum(binary_matrix_urllc_up[idx, :, rat] > 0)),
+                        "connected_embb_count": int(np.sum(binary_matrix_embb_up[idx, :, rat] > 0)),
+                    }
+                )
+            for sat in range(self.RAT_num_down):
+                used_embb = float(np.sum(embb_band_matrix_down[idx, :, sat]))
+                capacity = float(self.W_sat_Down / 2)
+                rat_rows.append(
+                    {
+                        "rat_id": int(self.RAT_num_up + sat),
+                        "rat_name": f"Satellite_{sat + 1}_down",
+                        "rat_type": "Satellite",
+                        "link_direction": "downlink",
+                        "used_bandwidth_total": used_embb,
+                        "used_bandwidth_urllc": 0.0,
+                        "used_bandwidth_embb": used_embb,
+                        "capacity": capacity,
+                        "utilization_total": used_embb / capacity if capacity > 0 else 0.0,
+                        "utilization_urllc": 0.0,
+                        "utilization_embb": used_embb / capacity if capacity > 0 else 0.0,
+                        "connected_urllc_count": 0,
+                        "connected_embb_count": int(np.sum(binary_matrix_embb_down[idx, :, sat] > 0)),
+                    }
+                )
+
+            bad_user_rows = []
+            for u in range(self.URLLC_num):
+                if total_delay_URLLC[idx, u] >= max_delay_urllc:
+                    bad_user_rows.append(
+                        {
+                            "user_id": int(u),
+                            "user_type": "URLLC",
+                            "selection_reason": "outage",
+                            "communication_delay": float(Communication_delay_urllc_e2e[idx, u]),
+                            "queue_delay": float(queue_time_urllc[idx, u]),
+                            "processing_delay": float(computation_time_urllc[idx, u]),
+                            "total_delay": float(total_delay_URLLC[idx, u]),
+                            "deadline": float(deadline_urllc[idx, u]),
+                            "violation": float(max(total_delay_URLLC[idx, u] - deadline_urllc[idx, u], 0.0)),
+                            "bottleneck_reason": "urlLC_outage",
+                        }
+                    )
+
+            top_count = max(1, int(np.ceil(0.2 * self.eMBB_num)))
+            top_embb = np.argsort(total_delay_eMBB[idx])[-top_count:][::-1]
+            for e in top_embb:
+                delays = {
+                    "communication_delay": float(Communication_delay_eMBB_e2e[idx, e]),
+                    "queue_delay": float(queue_time_embb[idx, e]),
+                    "processing_delay": float(computation_time_embb[idx, e]),
+                }
+                bottleneck_reason = max(delays, key=delays.get)
+                bad_user_rows.append(
+                    {
+                        "user_id": int(self.URLLC_num + e),
+                        "user_type": "eMBB",
+                        "selection_reason": "top_20_percent_delay",
+                        **delays,
+                        "total_delay": float(total_delay_eMBB[idx, e]),
+                        "deadline": float(deadline_embb[idx, e]),
+                        "violation": float(max(total_delay_eMBB[idx, e] - deadline_embb[idx, e], 0.0)),
+                        "bottleneck_reason": bottleneck_reason,
+                    }
+                )
+
+            details = {
+                "link_rates": link_rows,
+                "rat_utilization": rat_rows,
+                "bad_users": bad_user_rows,
+            }
+            return f, cost_urllc, CV, CV_pha, trans_delay, queue_delay, details
 
         return f, cost_urllc, CV, CV_pha,trans_delay ,queue_delay
     
@@ -990,6 +1140,84 @@ def _append_outer_iteration_metrics(result_dir, outer_iteration, seed, metrics):
     return metrics_path
 
 
+def _write_diagnostic_csvs(result_dir, outer_iteration, diagnostics):
+    os.makedirs(result_dir, exist_ok=True)
+    outputs = {}
+    specs = {
+        "link_rates": (
+            f"feedback_link_rates_iteration{outer_iteration}.csv",
+            [
+                "user_id",
+                "user_type",
+                "rat_id",
+                "rat_name",
+                "rat_type",
+                "selected",
+                "uplink_rate",
+                "downlink_rate",
+                "effective_e2e_rate",
+            ],
+        ),
+        "rat_utilization": (
+            f"feedback_rat_utilization_iteration{outer_iteration}.csv",
+            [
+                "rat_id",
+                "rat_name",
+                "rat_type",
+                "link_direction",
+                "used_bandwidth_total",
+                "used_bandwidth_urllc",
+                "used_bandwidth_embb",
+                "capacity",
+                "utilization_total",
+                "utilization_urllc",
+                "utilization_embb",
+                "connected_urllc_count",
+                "connected_embb_count",
+            ],
+        ),
+        "bad_users": (
+            f"feedback_bad_users_iteration{outer_iteration}.csv",
+            [
+                "user_id",
+                "user_type",
+                "selection_reason",
+                "communication_delay",
+                "queue_delay",
+                "processing_delay",
+                "total_delay",
+                "deadline",
+                "violation",
+                "bottleneck_reason",
+            ],
+        ),
+    }
+
+    for key, (filename, fieldnames) in specs.items():
+        path = os.path.join(result_dir, filename)
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in diagnostics.get(key, []):
+                writer.writerow({name: row.get(name) for name in fieldnames})
+        outputs[key] = path
+
+    selected_path = os.path.join(result_dir, f"feedback_selected_link_rates_iteration{outer_iteration}.csv")
+    link_fieldnames = specs["link_rates"][1]
+    selected_rows = []
+    for row in diagnostics.get("link_rates", []):
+        if int(row.get("selected", 0)) == 1:
+            selected_rows.append(row)
+
+    with open(selected_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=link_fieldnames)
+        writer.writeheader()
+        for row in selected_rows:
+            writer.writerow({name: row.get(name) for name in link_fieldnames})
+    outputs["selected_link_rates"] = selected_path
+    return outputs
+
+
 def _first_existing_path(*paths):
     for path in paths:
         if os.path.exists(path):
@@ -1065,7 +1293,8 @@ if __name__=="__main__":
     seed = 42
     np.random.seed(seed)
     random.seed(seed)
-    outer_iteration = 0
+    outer_iteration = 1
+    pool_dir = os.path.join("Pool", f"Outer{outer_iteration}")
 
 
 
@@ -1073,10 +1302,14 @@ if __name__=="__main__":
     # 直接从 Solution/*_offloading_decision.csv 构造 outer（更简单，不需要先生成 outer_association.npy）
     outer_solution = build_outer_from_offloading_decision(
         urllc_csv_path=_first_existing_path(
+            os.path.join("Solution", f"Outer_{outer_iteration}", f"urllc_offloading_decision_{k_urllc}.csv"),
+            os.path.join("Solution", f"Outer_{outer_iteration}", "urllc_offloading_decision.csv"),
             os.path.join("Solution", f"urllc_offloading_decision_{k_urllc}.csv"),
             os.path.join("Solution", "urllc_offloading_decision.csv"),
         ),
         embb_csv_path=_first_existing_path(
+            os.path.join("Solution", f"Outer_{outer_iteration}", f"embb_offloading_decision_{k_embb}.csv"),
+            os.path.join("Solution", f"Outer_{outer_iteration}", "embb_offloading_decision.csv"),
             os.path.join("Solution", f"embb_offloading_decision_{k_embb}.csv"),
             os.path.join("Solution", "embb_offloading_decision.csv"),
         ),
@@ -1109,10 +1342,7 @@ if __name__=="__main__":
 
     # seed = np.random.seed(42)
     # outer= np.ones((k_urllc+k_embb,RAT_num))   # LLM (GPT),association  
-    os.makedirs("Pool", exist_ok=True)
-    positive_pool, negative_pool, visited_associations, global_best_feedback = _load_feedback_files("Pool")
-    positive_pool, negative_pool = _drop_iteration_entries(positive_pool, negative_pool, outer_iteration)
-    visited_associations = _rebuild_visited_associations(positive_pool, negative_pool)
+    os.makedirs(pool_dir, exist_ok=True)
 
     outer = outer_solution.copy()
         
@@ -1123,7 +1353,7 @@ if __name__=="__main__":
     population_best,fitness_best,CV_best,cost_urllc_best,fitness_generation_full  =  Inner.run_origin()
     print(fitness_generation_full)
     fitness_result_path = _write_fitness_result(
-        "Pool",
+        pool_dir,
         outer_iteration,
         fitness_best,
         CV_best,
@@ -1131,33 +1361,18 @@ if __name__=="__main__":
         fitness_generation_full,
     )
     metrics_result_path = _append_outer_iteration_metrics(
-        "Result",
+        pool_dir,
         outer_iteration,
         seed,
         Inner.best_metrics,
     )
-    global_best_feedback = update_feedback_pools(
-        "Pool",
-        outer_iteration,
-        outer,
-        population_best,
-        fitness_best,
-        CV_best,
-        cost_urllc_best,
-        positive_pool,
-        negative_pool,
-        visited_associations,
-        global_best_feedback,
-    )
+    *_, diagnostics = Inner.evalVars(np.asarray(population_best, dtype=float).reshape(1, -1), return_details=True)
+    diagnostic_paths = _write_diagnostic_csvs(pool_dir, outer_iteration, diagnostics)
 
-    feedback_path, summary_path = _write_feedback_files(
-        "Pool",
-        positive_pool,
-        negative_pool,
-        visited_associations,
-    )
-    print(f"Saved feedback pools to {feedback_path}")
-    print(f"Saved feedback summary to {summary_path}")
     print(f"Saved best fitness value to {fitness_result_path}")
     print(f"Saved outer iteration metrics to {metrics_result_path}")
+    print(f"Saved link-rate feedback to {diagnostic_paths['link_rates']}")
+    print(f"Saved selected link-rate feedback to {diagnostic_paths['selected_link_rates']}")
+    print(f"Saved RAT-utilization feedback to {diagnostic_paths['rat_utilization']}")
+    print(f"Saved bad-user feedback to {diagnostic_paths['bad_users']}")
 

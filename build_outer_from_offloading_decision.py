@@ -159,9 +159,10 @@ def build_outer_from_offloading_decision(
 
 
 def build_and_save_outer_solution_csv(
-    urllc_csv_path: str = os.path.join("Solution", "urllc_offloading_decision.csv"),
-    embb_csv_path: str = os.path.join("Solution", "embb_offloading_decision.csv"),
-    out_csv_path: str = os.path.join("Solution", "outer_solution.csv"),
+    outer_iteration: int = 0,
+    urllc_csv_path: str | None = None,
+    embb_csv_path: str | None = None,
+    out_csv_path: str | None = None,
     sixg_num: int = 2,
     wifi_num: int = 4,
     sat_num: int = 2,
@@ -171,6 +172,14 @@ def build_and_save_outer_solution_csv(
 
     Output format matches your old `outer_association.csv` style: plain 0/1 matrix, comma-separated.
     """
+    outer_dir = os.path.join("Solution", f"Outer_{outer_iteration}")
+    if urllc_csv_path is None:
+        urllc_csv_path = os.path.join(outer_dir, "urllc_offloading_decision.csv")
+    if embb_csv_path is None:
+        embb_csv_path = os.path.join(outer_dir, "embb_offloading_decision.csv")
+    if out_csv_path is None:
+        out_csv_path = os.path.join(outer_dir, "outer_solution.csv")
+
     outer = build_outer_from_offloading_decision(
         urllc_csv_path=urllc_csv_path,
         embb_csv_path=embb_csv_path,
@@ -188,15 +197,14 @@ if __name__ == "__main__":
     _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     os.chdir(_BASE_DIR)
 
+    outer_iteration = 1
     outer = build_and_save_outer_solution_csv(
-        urllc_csv_path=os.path.join("Solution", "urllc_offloading_decision.csv"),
-        embb_csv_path=os.path.join("Solution", "embb_offloading_decision.csv"),
-        out_csv_path=os.path.join("Solution", "outer_solution.csv"),
+        outer_iteration=outer_iteration,
         # 数量想改就改这里（或直接改函数默认值）
         sixg_num=2,
         wifi_num=4,
         sat_num=2,
     )
     print(f"[OK] outer shape = {outer.shape}")
-    print("[OK] saved: Solution/outer_solution.csv")
+    print(f"[OK] saved: Solution/Outer_{outer_iteration}/outer_solution.csv")
 
