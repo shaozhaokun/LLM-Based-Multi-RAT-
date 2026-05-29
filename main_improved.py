@@ -3,73 +3,19 @@ import random
 import pandas as pd
 import os
 import csv
+import hashlib
+import json
 from Scheduling import queue_delay_calculation
 
 from Position_channel_gen import RATDistanceCalculator
+from Task_gen import TaskGenerator
 from WF import water_filling_power_allocation, satellite_downlink_power_allocation
-
-
-
-def generate_random_outer(num_list, rat_num: int, sixg_num: int, wifi_num: int, sat_num: int, seed: int) -> np.ndarray:
-    """
-    随机生成 association(outer) 矩阵，带规则：
-    - URLLC：只能连接 1 个（one-hot）
-    - eMBB：可以连接多个（multi-hot），但至少 1 个
-    - 分区域接入：
-        K1(city)：只能连 terrestrial(6G+WiFi)
-        K2(ocean)：只能连 satellite
-        K3(hybrid)：都可以连
-
-    返回 outer: shape = (K_total, rat_num)
-    """
-    k1_u, k2_u, k3_u, k1_e, k2_e, k3_e = [int(x) for x in num_list]
-    k_urllc = k1_u + k2_u + k3_u
-    k_embb = k1_e + k2_e + k3_e
-    k_total = k_urllc + k_embb
-
-    assert rat_num == sixg_num + wifi_num + sat_num
-    terrestrial = np.arange(0, sixg_num + wifi_num, dtype=int)
-    satellite = np.arange(sixg_num + wifi_num, rat_num, dtype=int)
-
-    rng = np.random.default_rng(int(seed))
-    outer = np.zeros((k_total, rat_num), dtype=int)
-
-    def allowed_for_urllc(u_idx: int) -> np.ndarray:
-        if u_idx < k1_u:
-            return terrestrial
-        if u_idx < k1_u + k2_u:
-            return satellite
-        return np.arange(0, rat_num, dtype=int)
-
-    def allowed_for_embb(e_idx: int) -> np.ndarray:
-        if e_idx < k1_e:
-            return terrestrial
-        if e_idx < k1_e + k2_e:
-            return satellite
-        return np.arange(0, rat_num, dtype=int)
-
-    # URLLC one-hot
-    for u in range(k_urllc):
-        allowed = allowed_for_urllc(u)
-        pick = int(rng.choice(allowed))
-        outer[u, pick] = 1
-
-    # eMBB multi-hot (至少一个)
-    p = 0.1  # 每个允许 RAT 被选中的概率
-    for e in range(k_embb):
-        row = k_urllc + e
-        allowed = allowed_for_embb(e)
-        bits = (rng.random(allowed.size) < p).astype(int)
-        if bits.sum() == 0:
-            bits[int(rng.integers(0, allowed.size))] = 1
-        outer[row, allowed] = bits
-
-    return outer
+from build_outer_from_offloading_decision import build_outer_from_offloading_decision
 
 
 
 class MyproblemInner:
-    def __init__(self, URLLC_num, eMBB_num, RAT_num_cure, seed, outer_ass=None, ch=None, num_list=None, RAT_list=None, optimize_joint: bool = False):
+    def __init__(self, URLLC_num, eMBB_num, RAT_num_cure, seed, outer_ass,ch,num_list,RAT_list):
         # decision variables 24 * 6 + 24 * 2 = 192
         self.URLLC_num = URLLC_num
         self.eMBB_num = eMBB_num
@@ -83,34 +29,18 @@ class MyproblemInner:
         self.seed = seed
         self.outer_ass_ = outer_ass  #  (,D) 
         self.ch = ch   # channel ((eMBB+URLLC),RAT_num)
-        self.population_size = 10  # inner individual
-        self.generation = 1000        # inner generation
+        self.population_size = 20  # inner individual
+        self.generation = 200        # inner generation
         self.embb = eMBB_num * self.RAT_num
         self.num_list = num_list   # [k1_u,k2_u,k3_u,k1_e,k2_e,k3_e]
         self.RAT_list = RAT_list   # [6G_BSs_num,Wi-Fi_BSs_num,Satellite_BSs_num]
-        self.optimize_joint = optimize_joint
-
-        if (not self.optimize_joint) and (outer_ass is None):
-            raise ValueError("optimize_joint=False 时 outer_ass 不能为空（旧模式需要固定 association 掩码）。")
-        if self.optimize_joint and self.num_list is None:
-            raise ValueError("optimize_joint=True 时 num_list 不能为空（用于 K1/K2/K3 接入约束修复）。")
-        if self.RAT_list is None:
-            raise ValueError("RAT_list 不能为空。")
-        if self.ch is None:
-            raise ValueError("ch(channel) 不能为空。")
 
 
 
 
         self.chromosome_length = (self.eMBB_num +self.URLLC_num) * self.RAT_num     # （K_u + K_e）* M     
-        self.outer_ass = self.outer_ass_.reshape(1,self.chromosome_length) if self.outer_ass_ is not None else None
-        self.outer_ass_reshape = self.outer_ass.reshape(-1,self.RAT_num) if self.outer_ass is not None else None
-
-        # joint 编码：association(up) + allocation(full)
-        self.K_total = self.URLLC_num + self.eMBB_num
-        self.assoc_up_length = self.K_total * self.RAT_num_up          # 只优化上行关联；下行卫星关联由上行卫星关联派生
-        self.band_length = self.chromosome_length                      # allocation 仍是 full (up + down) 带宽
-        self.joint_length = self.assoc_up_length + self.band_length
+        self.outer_ass = self.outer_ass_.reshape(1,self.chromosome_length)
+        self.outer_ass_reshape = self.outer_ass.reshape(-1,self.RAT_num) 
 
         self.W_6g = 300 * 1e6     # 50 MHz
         self.W_wifi = 160 * 1e6     # 10 MHz
@@ -119,13 +49,13 @@ class MyproblemInner:
 
 
         
-        self.W_6g_ = 20 * 1e5   
-        self.W_wifi_ = 10 * 1e5    
+        self.W_6g_ = 50 * 1e5   
+        self.W_wifi_ = 20* 1e5    
 
-        self.W_sat_eMBB_up = 3* 1e5    
-        self.W_sat_URLLC_up = 3* 1e5    
-        self.W_sat_URLLC_down = 3* 1e5     # urllc 和 embb 进行分开分配
-        self.W_sat_eMBB_down = 3* 1e5
+        self.W_sat_eMBB_up = 6* 1e5    
+        self.W_sat_URLLC_up = 6* 1e5    
+        self.W_sat_URLLC_down = 6* 1e5     # urllc 和 embb 进行分开分配
+        self.W_sat_eMBB_down = 6* 1e5
         
         # URLLC下行功率 (每个卫星BS的URLLC下行传输功率，单位：W)
         self.L_sat_URLLC_down = 100.0  # 1 W，可根据实际模型调整    
@@ -180,331 +110,10 @@ class MyproblemInner:
                                          self.chromosome_length) + np.dot(np.ones((self.population_size,1)),self.lb)) * (np.dot(np.ones((self.population_size,1)) , self.outer_ass ))
 
         return population_
-
-    # =========================
-    # Joint optimization (association + allocation)
-    # =========================
-    def _allowed_uplink_rats_for_user(self, user_global_idx: int) -> np.ndarray:
-        """
-        根据 num_list 里的 K1/K2/K3 约束，返回该用户允许接入的 uplink RAT 索引集合（0..RAT_num_up-1）。
-        约定：
-        - terrestrial uplink: [0, RAT_num_terrestrial)
-        - satellite uplink:   [RAT_num_terrestrial, RAT_num_up)
-        """
-        k1_u, k2_u, k3_u, k1_e, k2_e, k3_e = self.num_list
-        urllc_end = self.URLLC_num
-
-        terrestrial = np.arange(0, self.RAT_num_terrestrial, dtype=int)
-        satellite = np.arange(self.RAT_num_terrestrial, self.RAT_num_up, dtype=int)
-
-        if user_global_idx < urllc_end:
-            j = user_global_idx
-            if j < k1_u:
-                return terrestrial
-            if j < k1_u + k2_u:
-                return satellite
-            return np.arange(0, self.RAT_num_up, dtype=int)  # hybrid
-        else:
-            j = user_global_idx - urllc_end
-            if j < k1_e:
-                return terrestrial
-            if j < k1_e + k2_e:
-                return satellite
-            return np.arange(0, self.RAT_num_up, dtype=int)  # hybrid
-
-    def _repair_assoc_up(self, assoc_up: np.ndarray) -> np.ndarray:
-        """
-        assoc_up: (NIND, K_total, RAT_num_up) 0/1
-        修复规则：
-        - 按 K1/K2/K3 禁止接入的 RAT 置 0
-        - URLLC：每个用户 uplink 必须 one-hot（恰好 1 个）
-        - eMBB：每个用户 uplink 至少 1 个
-        """
-        NIND = assoc_up.shape[0]
-
-        # 1) access restriction
-        for u in range(self.K_total):
-            allowed = self._allowed_uplink_rats_for_user(u)
-            mask_allowed = np.zeros((self.RAT_num_up,), dtype=int)
-            mask_allowed[allowed] = 1
-            assoc_up[:, u, :] = assoc_up[:, u, :] * mask_allowed.reshape(1, -1)
-
-        # 2) URLLC one-hot
-        for u in range(self.URLLC_num):
-            allowed = self._allowed_uplink_rats_for_user(u)
-            # 若全 0，随机补 1；若多于 1，随机保留 1
-            for i in range(NIND):
-                ones = np.where(assoc_up[i, u, :] > 0)[0]
-                if ones.size == 0:
-                    pick = int(np.random.choice(allowed))
-                    assoc_up[i, u, :] = 0
-                    assoc_up[i, u, pick] = 1
-                elif ones.size > 1:
-                    pick = int(np.random.choice(ones))
-                    assoc_up[i, u, :] = 0
-                    assoc_up[i, u, pick] = 1
-
-        # 3) eMBB at least one
-        for u in range(self.URLLC_num, self.K_total):
-            allowed = self._allowed_uplink_rats_for_user(u)
-            for i in range(NIND):
-                if np.sum(assoc_up[i, u, :]) == 0:
-                    pick = int(np.random.choice(allowed))
-                    assoc_up[i, u, pick] = 1
-
-        return assoc_up.astype(int)
-
-    def _build_assoc_full_from_up(self, assoc_up: np.ndarray) -> np.ndarray:
-        """
-        assoc_up: (NIND,K_total,RAT_num_up)
-        return assoc_full: (NIND,K_total,RAT_num_up+RAT_num_down)
-        规则：下行卫星关联 = 上行卫星关联（最后 M3 列）
-        """
-        NIND = assoc_up.shape[0]
-        assoc_full = np.zeros((NIND, self.K_total, self.RAT_num), dtype=int)
-        assoc_full[:, :, : self.RAT_num_up] = assoc_up
-
-        # downlink 只对应卫星，数量应等于 RAT_num_sat
-        m3 = self.RAT_num_sat
-        assoc_sat_up = assoc_up[:, :, self.RAT_num_terrestrial : self.RAT_num_terrestrial + m3]
-        assoc_full[:, :, self.RAT_num_up : self.RAT_num_up + m3] = assoc_sat_up
-        return assoc_full
-
-    def initialize_population_joint(self) -> np.ndarray:
-        """
-        joint individual = [assoc_up (0/1), band (continuous)]
-        """
-        # assoc_up init
-        assoc_up = np.zeros((self.population_size, self.K_total, self.RAT_num_up), dtype=int)
-
-        # 使用 outer_ass 作为“一个先验个体”（如果提供），其余随机
-        if self.outer_ass is not None:
-            outer_full = self.outer_ass.reshape(1, self.K_total, self.RAT_num)[0]
-            assoc_up[0, :, :] = outer_full[:, : self.RAT_num_up].astype(int)
-
-        start_i = 1 if self.outer_ass is not None else 0
-        for i in range(start_i, self.population_size):
-            for u in range(self.K_total):
-                allowed = self._allowed_uplink_rats_for_user(u)
-                if u < self.URLLC_num:
-                    pick = int(np.random.choice(allowed))
-                    assoc_up[i, u, pick] = 1
-                else:
-                    # eMBB：随机多连接，但至少一个
-                    bits = (np.random.rand(allowed.size) < 0.5).astype(int)
-                    if np.sum(bits) == 0:
-                        bits[np.random.randint(0, allowed.size)] = 1
-                    assoc_up[i, u, allowed] = bits
-
-        assoc_up = self._repair_assoc_up(assoc_up)
-        assoc_full = self._build_assoc_full_from_up(assoc_up)
-
-        # band init（全维度），再用 assoc_full 掩码
-        band = (np.dot(np.ones((self.population_size, 1)), (self.ub - self.lb)) * np.random.rand(self.population_size, self.band_length)
-                + np.dot(np.ones((self.population_size, 1)), self.lb))
-        band = band * assoc_full.reshape(self.population_size, -1)
-
-        joint = np.hstack([assoc_up.reshape(self.population_size, -1).astype(float), band.astype(float)])
-        return joint
-
-    def _decode_joint(self, X_joint: np.ndarray):
-        """
-        X_joint: (NIND, joint_length)
-        return: (assoc_up (NIND,K,RAT_num_up), assoc_full (NIND,K,RAT_num), band_masked_flat (NIND,band_length))
-        """
-        NIND = X_joint.shape[0]
-        assoc_part = X_joint[:, : self.assoc_up_length]
-        band_part = X_joint[:, self.assoc_up_length :]
-
-        assoc_up = (assoc_part.reshape(NIND, self.K_total, self.RAT_num_up) > 0.5).astype(int)
-        assoc_up = self._repair_assoc_up(assoc_up)
-        assoc_full = self._build_assoc_full_from_up(assoc_up)
-
-        band = band_part.reshape(NIND, self.K_total, self.RAT_num)
-        band_masked = band * assoc_full
-        return assoc_up, assoc_full, band_masked.reshape(NIND, -1)
-
-    def _band_bounds_matrix(self):
-        """(K_total, RAT_num) 的带宽上下界矩阵，便于按 user/RAT 取界。"""
-        lb_mat = self.lb.reshape(self.K_total, self.RAT_num)
-        ub_mat = self.ub.reshape(self.K_total, self.RAT_num)
-        return lb_mat, ub_mat
-
-    def crossover_joint(self, population_joint: np.ndarray, crossover_rate: float = 0.7, gene_rate: float = 0.8) -> np.ndarray:
-        """
-        GA 交叉（参考 Single_GA 思路）：
-        - 以 crossover_rate 选中父母对
-        - 对每个 user 的“块”以 gene_rate 概率交换 assoc_up 与对应 band(user,:)（同时交换，保持结构一致）
-        - 最后做 repair + mask
-        """
-        N = population_joint.shape[0]
-        assoc = population_joint[:, : self.assoc_up_length].reshape(N, self.K_total, self.RAT_num_up)
-        band = population_joint[:, self.assoc_up_length :].reshape(N, self.K_total, self.RAT_num)
-
-        offspring_assoc = assoc.copy()
-        offspring_band = band.copy()
-
-        perm = np.random.permutation(N)
-        half = N // 2
-        p1s = perm[:half]
-        p2s = perm[half:half + half]
-
-        for p1, p2 in zip(p1s, p2s):
-            if np.random.rand() >= crossover_rate:
-                continue
-            for u in range(self.K_total):
-                if np.random.rand() < gene_rate:
-                    # swap assoc_up block
-                    tmp = offspring_assoc[p1, u, :].copy()
-                    offspring_assoc[p1, u, :] = offspring_assoc[p2, u, :]
-                    offspring_assoc[p2, u, :] = tmp
-                    # swap band block (full up+down)
-                    tmpb = offspring_band[p1, u, :].copy()
-                    offspring_band[p1, u, :] = offspring_band[p2, u, :]
-                    offspring_band[p2, u, :] = tmpb
-
-        # repair + mask
-        assoc_up = (offspring_assoc > 0.5).astype(int)
-        assoc_up = self._repair_assoc_up(assoc_up)
-        assoc_full = self._build_assoc_full_from_up(assoc_up)
-        band_masked = offspring_band * assoc_full
-        return np.hstack([assoc_up.reshape(N, -1).astype(float), band_masked.reshape(N, -1).astype(float)])
-
-    def mutate_joint(self, population_joint: np.ndarray, mutation_rate: float = 0.05) -> np.ndarray:
-        """
-        GA 变异（参考 Single_GA 思路）：
-        - URLLC：以 mutation_rate 概率重新选一个允许的 uplink RAT（one-hot）
-        - eMBB：对允许的 uplink RAT 逐 bit 翻转（概率 mutation_rate），并确保至少一个
-        - band：当某条链路变为 1 时在 [lb,ub] 内随机；变为 0 时置 0；最后做 repair + mask
-        """
-        N = population_joint.shape[0]
-        assoc_up = (population_joint[:, : self.assoc_up_length].reshape(N, self.K_total, self.RAT_num_up) > 0.5).astype(int)
-        band = population_joint[:, self.assoc_up_length :].reshape(N, self.K_total, self.RAT_num).copy()
-
-        lb_mat, ub_mat = self._band_bounds_matrix()
-        M3 = int(self.RAT_list[2])
-
-        for i in range(N):
-            # --- URLLC one-hot mutation ---
-            for u in range(self.URLLC_num):
-                if np.random.rand() >= mutation_rate:
-                    continue
-                allowed = self._allowed_uplink_rats_for_user(u)
-                pick = int(np.random.choice(allowed))
-                assoc_up[i, u, :] = 0
-                assoc_up[i, u, pick] = 1
-
-                # 清空该 user 的 band，再给 pick 随机一个
-                band[i, u, :] = 0.0
-                band[i, u, pick] = (ub_mat[u, pick] - lb_mat[u, pick]) * np.random.rand() + lb_mat[u, pick]
-
-            # --- eMBB bit-flip mutation ---
-            for u in range(self.URLLC_num, self.K_total):
-                allowed = self._allowed_uplink_rats_for_user(u)
-                for k in allowed:
-                    if np.random.rand() >= mutation_rate:
-                        continue
-                    assoc_up[i, u, k] = 1 - assoc_up[i, u, k]
-                    if assoc_up[i, u, k] == 1:
-                        band[i, u, k] = (ub_mat[u, k] - lb_mat[u, k]) * np.random.rand() + lb_mat[u, k]
-                    else:
-                        band[i, u, k] = 0.0
-
-                # 至少一个 uplink RAT
-                if np.sum(assoc_up[i, u, :]) == 0:
-                    pick = int(np.random.choice(allowed))
-                    assoc_up[i, u, pick] = 1
-                    band[i, u, pick] = (ub_mat[u, pick] - lb_mat[u, pick]) * np.random.rand() + lb_mat[u, pick]
-
-            # 可选：对下行卫星带宽也做一点随机扰动（若该用户接入卫星）
-            # 这里保持简单：下行关联由上行卫星关联派生，band 将在 mask 时自动清零/保留
-            # 因此不额外做下行变异
-
-        # repair + derive downlink assoc + mask
-        assoc_up = self._repair_assoc_up(assoc_up)
-        assoc_full = self._build_assoc_full_from_up(assoc_up)
-        band_masked = band * assoc_full
-
-        # clip to bounds（防止极端情况下越界）
-        band_masked = np.minimum(np.maximum(band_masked, lb_mat.reshape(1, self.K_total, self.RAT_num)), ub_mat.reshape(1, self.K_total, self.RAT_num))
-        band_masked = band_masked * assoc_full
-
-        return np.hstack([assoc_up.reshape(N, -1).astype(float), band_masked.reshape(N, -1).astype(float)])
-
-    def crossover_ga_allocation(self, population: np.ndarray, crossover_rate: float = 0.7) -> np.ndarray:
-        """
-        allocation-only 的 GA 交叉：对父母对做 uniform crossover，然后再乘 outer_ass 掩码。
-        """
-        N, D = population.shape
-        offspring = population.copy()
-        perm = np.random.permutation(N)
-        half = N // 2
-        p1s = perm[:half]
-        p2s = perm[half:half + half]
-        for p1, p2 in zip(p1s, p2s):
-            if np.random.rand() >= crossover_rate:
-                continue
-            mask = (np.random.rand(D) < 0.5).astype(float)
-            c1 = offspring[p1] * (1 - mask) + offspring[p2] * mask
-            c2 = offspring[p2] * (1 - mask) + offspring[p1] * mask
-            offspring[p1] = c1
-            offspring[p2] = c2
-        if self.outer_ass is not None:
-            offspring = offspring * (np.ones((N, 1)) @ self.outer_ass)
-        return offspring
-
-    def mutate_ga_allocation(self, population: np.ndarray, mutation_rate: float = 0.01) -> np.ndarray:
-        """
-        allocation-only 的 GA 变异：以 mutation_rate 概率对每个 gene 重新随机采样，然后再乘 outer_ass 掩码。
-        """
-        N, D = population.shape
-        mutated = population.copy()
-        mask = (np.random.rand(N, D) < mutation_rate)
-        rand_vals = (np.ones((N, 1)) @ (self.ub - self.lb)) * np.random.rand(N, D) + (np.ones((N, 1)) @ self.lb)
-        mutated[mask] = rand_vals[mask]
-        if self.outer_ass is not None:
-            mutated = mutated * (np.ones((N, 1)) @ self.outer_ass)
-        return mutated
-
-    def de_like_mutate_band_joint(self, population_joint: np.ndarray, F: float = 0.8, rate: float = 0.8) -> np.ndarray:
-        """
-        在 GA 的 joint 模式里加入“类似 DE 的翻转/差分扰动”：
-        - 只对 allocation(band) 段做 DE 风格差分变异（a + F*(b-c) + 反射边界）
-        - association 段保持不变（仍由 GA 交叉/bit-flip 来探索）
-        - 以 rate 的概率对个体启用该扰动（避免太“硬”，保留 GA 随机性）
-        """
-        N = population_joint.shape[0]
-        if N == 0:
-            return population_joint
-
-        assoc_part = population_joint[:, : self.assoc_up_length]
-        band_part = population_joint[:, self.assoc_up_length :]
-
-        # 先按当前 association 做一次 mask，避免对 0-link 的带宽做无意义扰动
-        assoc_up = (assoc_part.reshape(N, self.K_total, self.RAT_num_up) > 0.5).astype(int)
-        assoc_up = self._repair_assoc_up(assoc_up)
-        assoc_full = self._build_assoc_full_from_up(assoc_up)
-
-        band = band_part.reshape(N, self.K_total, self.RAT_num) * assoc_full
-        band_flat = band.reshape(N, -1)
-
-        # 用现有的 self.mutate 做 DE-style donor（它带反射边界）
-        donor_flat = self.mutate(band_flat, F=F)
-
-        use = (np.random.rand(N) < rate).astype(float).reshape(N, 1)
-        band_new_flat = band_flat * (1.0 - use) + donor_flat * use
-
-        # clip + mask（保持与 association 一致）
-        lb_mat, ub_mat = self._band_bounds_matrix()
-        band_new = band_new_flat.reshape(N, self.K_total, self.RAT_num)
-        band_new = np.minimum(np.maximum(band_new, lb_mat.reshape(1, self.K_total, self.RAT_num)), ub_mat.reshape(1, self.K_total, self.RAT_num))
-        band_new = band_new * assoc_full
-
-        return np.hstack([assoc_up.reshape(N, -1).astype(float), band_new.reshape(N, -1).astype(float)])
     
     
 
-    def mutate(self, population, F=0.5):
+    def mutate(self, population, F=0.4):
         F_matrix_ = F * np.ones((self.population_size,1))    # N_2 x 1
         F_matrix =  F_matrix_ @ np.ones((1, self.chromosome_length))  # N_2 x D
         
@@ -541,7 +150,7 @@ class MyproblemInner:
         return donor_matrix
 
     
-    def crossover(self, population_, mutant_population, CR=0.2):
+    def crossover(self, population_, mutant_population, CR=0.5):
         
         trial_population = np.copy(population_)  
 
@@ -948,6 +557,10 @@ class MyproblemInner:
 
         RAT_sat1_up = RAT_sat1_up_urllc + RAT_sat1_up_embb
 
+
+
+       
+
         RAT_sat2_up_urllc =  np.sum(urllc_band_matrix_up[:,:,[7]],axis=1)
         
         RAT_sat2_up_embb = np.sum(embb_band_matrix_up[:,:,[7]],axis=1)
@@ -981,11 +594,11 @@ class MyproblemInner:
             ])
         
         
+        
         pha = CV
         pha = np.where(CV < 0, 0, CV)
 
         CV_pha = np.sum(pha,axis=1)   # NIND x 1
-
         # ------------------------------------------------------------------------------------------------------------
         max_delay_urllc = 2
         max_delay_eMBB  = 2
@@ -1081,11 +694,8 @@ class MyproblemInner:
     
     def run_origin(self):
 
-        if self.optimize_joint:
-            population = self.initialize_population_joint()  # NIND x (assoc_up + band)
-        else:
-            population_inter = self.initialize_population_origin()            #  Big W_n  eq(51)  # NIND x D
-            population = population_inter * np.dot(np.ones((self.population_size,1)),self.outer_ass)  # NIND x D
+        population_inter = self.initialize_population_origin()            #  Big W_n  eq(51)  # NIND x D
+        population = population_inter * np.dot(np.ones((self.population_size,1)),self.outer_ass)  # NIND x D
 
         fitness_best = 1000000
         CV_best = 1000000000000000
@@ -1098,14 +708,7 @@ class MyproblemInner:
         CV_generation_full = np.zeros((self.generation,1))
         cost_urllc_generation_full = np.zeros((self.generation,1))
 
-        def _scalar(x):
-            """把 numpy 标量/1元素数组转成 python 标量，避免 print 时把数组整段打印出来。"""
-            try:
-                return np.asarray(x).item()
-            except Exception:
-                return x
-
-        for gen in range(self.generation):  # Number of generations
+        for _ in range(self.generation):  # Number of generations
             population_generation = np.zeros((self.generation,self.chromosome_length))
             fitness_generation = np.zeros((self.generation,1))
             CV_generation = np.zeros((self.generation,1))
@@ -1115,22 +718,10 @@ class MyproblemInner:
 
 
 
-            if self.optimize_joint:
-                population_cross = self.crossover_joint(population)
-                trial_population = self.mutate_joint(population_cross)
-                # 追加：DE-style 的连续“翻转/扰动”用于带宽段（保留 GA 的 association 搜索）
-                trial_population = self.de_like_mutate_band_joint(trial_population, F=0.3, rate=0.3)
-
-                _, _, pop_band = self._decode_joint(population)
-                _, _, trial_band = self._decode_joint(trial_population)
-
-                fitness_pop, cost_urllc_pop, CV_pop, CV_pha_pop, trans_delay_pop, queue_delay_pop = self.evalVars(pop_band)
-                fitness_trial, cost_urllc_trail, CV_trial, CV_pha_trial, trans_delay_trial, queue_delay_trial = self.evalVars(trial_band)
-            else:
-                population_cross = self.crossover_ga_allocation(population)
-                trial_population = self.mutate_ga_allocation(population_cross)
-                fitness_pop, cost_urllc_pop,CV_pop, CV_pha_pop,trans_delay_pop,queue_delay_pop = self.evalVars(population)
-                fitness_trial, cost_urllc_trail,CV_trial, CV_pha_trial,trans_delay_trial,queue_delay_trial = self.evalVars(trial_population)
+            donor_population = self.mutate(population)
+            trial_population = self.crossover(population, donor_population)
+            fitness_pop, cost_urllc_pop,CV_pop, CV_pha_pop,trans_delay_pop,queue_delay_pop = self.evalVars(population)
+            fitness_trial, cost_urllc_trail,CV_trial, CV_pha_trial,trans_delay_trial,queue_delay_trial = self.evalVars(trial_population)
             #  选出两个种群的最优解
             best_fitness,best_population,best_CV_pha,best_cost_urllc,best_trans,best_queue  = self.select(fitness_trial,trial_population,CV_pha_trial,cost_urllc_trail,trans_delay_trial,queue_delay_trial,
                                                                    fitness_pop,population,CV_pha_pop,cost_urllc_pop,trans_delay_pop,queue_delay_pop)
@@ -1141,16 +732,12 @@ class MyproblemInner:
             # 可以根据更新后的适应度进行选择， 进行排序
             best_fitness , best_population, best_CV_pha,best_cost_urllc,best_trans, best_queue = self.select_based_on_fitness(best_population, best_fitness,best_CV_pha,best_cost_urllc,best_trans,best_queue) 
             # population_local,selected_fitness = self.select_based_on_fitness(population, fitness) 
+            population = best_population.copy()
 
-            # 记录每一代的最优 allocation（保持与旧接口一致）
-            if self.optimize_joint:
-                _, _, best_band = self._decode_joint(best_population[[0], :])
-                population_generation[gen] = best_band[0]
-            else:
-                population_generation[gen] =  best_population[0]   #记录了每一代的最优解
-            fitness_generation[gen] = best_fitness[0]
-            CV_generation[gen] = best_CV_pha[0]
-            cost_urllc_generation[gen] = best_cost_urllc[0]
+            population_generation[_] =  best_population[0]   #记录了每一代的最优解
+            fitness_generation[_] = best_fitness[0]
+            CV_generation[_] = best_CV_pha[0]
+            cost_urllc_generation[_] = best_cost_urllc[0]
 
 
 
@@ -1176,32 +763,22 @@ class MyproblemInner:
             
             # 记录全部的最优解
             if CV_best == 0:
-                fitness_generation_full[gen] = best_fitness[0]
-                CV_generation_full[gen] = best_CV_pha[0]
+                fitness_generation_full[_] = best_fitness[0]
+                CV_generation_full[_] = best_CV_pha[0]
 
             else:
                 
-                fitness_generation_full[gen] = 0
-                CV_generation_full[gen] = CV_generation_full[gen]
+                fitness_generation_full[_] = 0
+                CV_generation_full[_] = CV_generation_full[_]
 
 
 
 
             
-            print('Innergeneration{}|| CV{} ||  Cost{}  ||'.format(gen, _scalar(CV_best), _scalar(fitness_best)))
+            print('Innergeneration{}|| CV{} ||  Cost{}  ||'.format(_,CV_best,fitness_best))
 
 
 
-
-        # 若是 joint 模式：population_best 是 joint 染色体；但为了兼容旧接口，这里仍返回“best allocation”
-        if self.optimize_joint:
-            assoc_up_best, assoc_full_best, band_best = self._decode_joint(population_best.reshape(1, -1))
-            # 暴露最优 association 方便外部取用
-            self.best_assoc_up = assoc_up_best[0]
-            self.best_assoc_full = assoc_full_best[0]
-            population_best_out = band_best[0]
-        else:
-            population_best_out = population_best
 
         self.best_metrics = {
             "urllc_outage_ratio": _scalar(queue_best[1]),
@@ -1212,15 +789,183 @@ class MyproblemInner:
             "cost_urllc": _scalar(cost_urllc_best),
         }
 
-        return population_best_out,fitness_best,CV_best,cost_urllc_best,fitness_generation_full       # population_best_out: allocation 向量
+        return population_best,fitness_best,CV_best,cost_urllc_best,fitness_generation_full       # population_best: (chormlength,1) fitness_best: : (NIND,1) CV_best: value
     
     
+def _scalar(value):
+    return float(np.asarray(value).reshape(-1)[0])
 
 
-def _append_ga_metrics(result_dir, seed, metrics):
+def _association_key(association):
+    association = np.asarray(association, dtype=np.int8)
+    return hashlib.sha1(association.tobytes()).hexdigest()
+
+
+def _load_feedback_files(pool_dir):
+    feedback_path = os.path.join(pool_dir, "feedback_pools.json")
+    if not os.path.exists(feedback_path):
+        return [], [], {}, {"fitness": float("inf"), "iteration": None}
+
+    with open(feedback_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    positive_pool = data.get("positive_pool", [])
+    negative_pool = data.get("negative_pool", [])
+    visited_associations = data.get("visited_associations", {})
+    best_entry = min(
+        positive_pool,
+        key=lambda item: item.get("fitness", float("inf")),
+        default=None,
+    )
+    if best_entry is None:
+        global_best = {"fitness": float("inf"), "iteration": None}
+    else:
+        global_best = {
+            "fitness": float(best_entry.get("fitness", float("inf"))),
+            "iteration": best_entry.get("outer_iteration"),
+        }
+    return positive_pool, negative_pool, visited_associations, global_best
+
+
+def _save_feedback_snapshot(pool_dir, outer_iteration, association, bandwidth, fitness, cv, cost_urllc, pool_name, reason):
+    association_key = _association_key(association)
+    association_path = os.path.join(pool_dir, f"association_iteration{outer_iteration}.npy")
+    bandwidth_path = os.path.join(pool_dir, f"bandwidth_iteration{outer_iteration}.npy")
+    np.save(association_path, np.asarray(association, dtype=np.int8))
+    np.save(bandwidth_path, np.asarray(bandwidth, dtype=float))
+
+    return {
+        "outer_iteration": int(outer_iteration),
+        "association_key": association_key,
+        "association_path": association_path,
+        "bandwidth_path": bandwidth_path,
+        "fitness": _scalar(fitness),
+        "cv": _scalar(cv),
+        "cost_urllc": _scalar(cost_urllc),
+        "pool": pool_name,
+        "reason": reason,
+    }
+
+
+def _write_feedback_files(pool_dir, positive_pool, negative_pool, visited_associations):
+    feedback_path = os.path.join(pool_dir, "feedback_pools.json")
+    with open(feedback_path, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "positive_pool": positive_pool,
+                "negative_pool": negative_pool,
+                "visited_associations": visited_associations,
+            },
+            f,
+            indent=2,
+        )
+
+    summary_path = os.path.join(pool_dir, "feedback_summary.csv")
+    rows = positive_pool + negative_pool
+    with open(summary_path, "w", newline="", encoding="utf-8") as f:
+        fieldnames = ["outer_iteration", "pool", "association_key", "fitness", "cv", "cost_urllc", "reason"]
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({name: row.get(name) for name in fieldnames})
+
+    return feedback_path, summary_path
+
+
+def _drop_iteration_entries(positive_pool, negative_pool, outer_iteration):
+    def keep_other_iteration(entry):
+        return entry.get("outer_iteration") != outer_iteration
+
+    return (
+        [entry for entry in positive_pool if keep_other_iteration(entry)],
+        [entry for entry in negative_pool if keep_other_iteration(entry)],
+    )
+
+
+def _rebuild_visited_associations(positive_pool, negative_pool):
+    visited_associations = {}
+    for entry in positive_pool + negative_pool:
+        association_key = entry.get("association_key")
+        if association_key:
+            visited_associations[association_key] = visited_associations.get(association_key, 0) + 1
+    return visited_associations
+
+
+def update_feedback_pools(
+    pool_dir,
+    outer_iteration,
+    association,
+    bandwidth,
+    fitness,
+    cv,
+    cost_urllc,
+    positive_pool,
+    negative_pool,
+    visited_associations,
+    global_best,
+):
+    association_key = _association_key(association)
+    visited_associations[association_key] = visited_associations.get(association_key, 0) + 1
+
+    fitness_value = _scalar(fitness)
+    cv_value = _scalar(cv)
+    if cv_value == 0.0 and fitness_value < global_best["fitness"]:
+        global_best["fitness"] = fitness_value
+        global_best["iteration"] = int(outer_iteration)
+        pool_name = "positive"
+        reason = "new_global_best"
+    elif cv_value == 0.0:
+        pool_name = "negative"
+        reason = "feasible_but_not_improved"
+    else:
+        pool_name = "negative"
+        reason = "constraint_violation"
+
+    entry = _save_feedback_snapshot(
+        pool_dir,
+        outer_iteration,
+        association,
+        bandwidth,
+        fitness,
+        cv,
+        cost_urllc,
+        pool_name,
+        reason,
+    )
+    if pool_name == "positive":
+        positive_pool.append(entry)
+    else:
+        negative_pool.append(entry)
+
+    return global_best
+
+
+def _write_fitness_result(pool_dir, outer_iteration, fitness_best, cv_best, cost_urllc_best, fitness_generation_full):
+    best_fitness_value = _scalar(fitness_best)
+    result = {
+        "outer_iteration": int(outer_iteration),
+        "best_fitness": best_fitness_value,
+        "cv": _scalar(cv_best),
+        "cost_urllc": _scalar(cost_urllc_best),
+    }
+
+    result_path = os.path.join(pool_dir, f"best_fitness_iteration{outer_iteration}.json")
+    with open(result_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=2)
+
+    np.savetxt(
+        os.path.join(pool_dir, f"fitness_iteration{outer_iteration}.csv"),
+        np.asarray(fitness_generation_full, dtype=float),
+        delimiter=",",
+    )
+    return result_path
+
+
+def _append_outer_iteration_metrics(result_dir, outer_iteration, seed, metrics):
     os.makedirs(result_dir, exist_ok=True)
-    metrics_path = os.path.join(result_dir, "ga_best_metrics.csv")
+    metrics_path = os.path.join(result_dir, "outer_iteration_best_metrics.csv")
     fieldnames = [
+        "outer_iteration",
         "seed",
         "urllc_outage_ratio",
         "average_embb_delay",
@@ -1237,6 +982,7 @@ def _append_ga_metrics(result_dir, seed, metrics):
             writer.writeheader()
         writer.writerow(
             {
+                "outer_iteration": int(outer_iteration),
                 "seed": int(seed),
                 **{name: metrics[name] for name in fieldnames if name in metrics},
             }
@@ -1244,7 +990,59 @@ def _append_ga_metrics(result_dir, seed, metrics):
     return metrics_path
 
 
+def _first_existing_path(*paths):
+    for path in paths:
+        if os.path.exists(path):
+            return path
+    return paths[0]
+
+
+def _complex_matrix_to_str(mat):
+    mat = np.asarray(mat)
+    re = mat.real
+    im = mat.imag
+    s = np.char.add(np.char.mod("%.2e", re), np.char.mod("%+.2e", im))
+    return np.char.add(s, "j")
+
+
+def _load_or_generate_channel_csv(channel_csv_path, k_urllc, k_embb, rat_num, seed, rat_list):
+    if os.path.exists(channel_csv_path):
+        return np.loadtxt(channel_csv_path, delimiter=",", dtype=complex)
+
+    calculator = RATDistanceCalculator(
+        urllc_num=k_urllc,
+        embb_num=k_embb,
+        RAT_num=rat_num,
+        time_=seed,
+        RAT_list=rat_list,
+    )
+    user_positions = calculator.generate_user_positions()
+    _, channel = calculator.calculate_DistancesAndChennel(user_positions)
+
+    os.makedirs("Channel", exist_ok=True)
+    np.savetxt(channel_csv_path, _complex_matrix_to_str(channel), delimiter=",", fmt="%s")
+    np.savetxt(
+        os.path.join("Channel", "channel_URLLC_{}_{}.csv".format(k_urllc, k_embb)),
+        _complex_matrix_to_str(channel[:k_urllc, :]),
+        delimiter=",",
+        fmt="%s",
+    )
+    np.savetxt(
+        os.path.join("Channel", "channel_eMBB_{}_{}.csv".format(k_urllc, k_embb)),
+        _complex_matrix_to_str(channel[k_urllc:, :]),
+        delimiter=",",
+        fmt="%s",
+    )
+    os.makedirs("Data", exist_ok=True)
+    np.save(os.path.join("Data", "user_position_{}_{}.npy".format(k_urllc, k_embb)), user_positions)
+    return channel
+
+
 if __name__=="__main__":
+
+    # 保证所有相对路径（Data/ Channel/ Result/ Solution/）都相对于本文件所在目录
+    _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    os.chdir(_BASE_DIR)
 
     k1_u = 20
     k2_u = 20
@@ -1265,44 +1063,101 @@ if __name__=="__main__":
 
 
     seed = 42
+    np.random.seed(seed)
+    random.seed(seed)
+    outer_iteration = 0
+
+
+
+   
+    # 直接从 Solution/*_offloading_decision.csv 构造 outer（更简单，不需要先生成 outer_association.npy）
+    outer_solution = build_outer_from_offloading_decision(
+        urllc_csv_path=_first_existing_path(
+            os.path.join("Solution", f"urllc_offloading_decision_{k_urllc}.csv"),
+            os.path.join("Solution", "urllc_offloading_decision.csv"),
+        ),
+        embb_csv_path=_first_existing_path(
+            os.path.join("Solution", f"embb_offloading_decision_{k_embb}.csv"),
+            os.path.join("Solution", "embb_offloading_decision.csv"),
+        ),
+        # 数量如果要改：去 build_outer_from_offloading_decision.py 里改默认值即可
+    )
+
+    urllc_task_path = os.path.join("Data", "urllc_tasks_{}.csv".format(k_urllc))
+    embb_task_path = os.path.join("Data", "embb_tasks_{}.csv".format(k_embb))
+    if not os.path.exists(urllc_task_path) or not os.path.exists(embb_task_path):
+        TaskGenerator(k_urllc, k_embb).save_tasks_to_csv()
+
+    channel_csv_path = os.path.join("Channel", "channel_{}_{}.csv".format(k_urllc, k_embb))
+    channel = _load_or_generate_channel_csv(
+        channel_csv_path,
+        k_urllc,
+        k_embb,
+        RAT_num,
+        seed,
+        RAT_list,
+    )
+
+    expected_rows = k_urllc + k_embb
+    expected_cols = RAT_num + Satellite_BSs_num  # uplink + sat_down(=sat_up copy)
+    if outer_solution.shape != (expected_rows, expected_cols):
+        raise ValueError(
+            f"outer shape mismatch: got {outer_solution.shape}, expected {(expected_rows, expected_cols)}. "
+            f"Please check task counts (k_urllc/k_embb) and RAT counts (SixG/WiFi/Satellite)."
+        )
+
 
     # seed = np.random.seed(42)
     # outer= np.ones((k_urllc+k_embb,RAT_num))   # LLM (GPT),association  
-    for seed in range(10,20):
-    # seed = 45
-        outer = generate_random_outer(
-            num_list=num_list,
-            rat_num=RAT_num,
-            sixg_num=SixG_BSs_num,
-            wifi_num=WiFi_BSs_num,
-            sat_num=Satellite_BSs_num,
-            seed=seed,
-        )
-        # outer = np.array([[1,0, 0,0,0,0,0,0],[0,1,0,0,0,0,0,0],[0,1,0,0,0,0,0,0],[0,0,1,0,0,0,0,0], [1,0, 0,0,0,0,0,0],[0,1,0,0,0,0,0,0],[0,1,0,0,0,0,0,0],[0,0,1,0,0,0,0,0],[0,1,0,0,0,0,0,0],[0,0,1,0,0,0,0,0] ,   # k1_u
-        #                 [0,0, 0,0,0,0,1,0],[0,0, 0,0,0,0,1,0],[0,0, 0,0,0,0,1,0],[0,0, 0,0,0,0,1,0], [0,0, 0,0,0,0,1,0],[0,0, 0,0,0,0,1,0],[0,0, 0,0,0,0,1,0],[0,0, 0,0,0,0,1,0],[0,0, 0,0,0,0,1,0],[0,0, 0,0,0,0,1,0],    # k2_u
-        #                 [0,1, 0,0,0,0,0,0],[0,0, 0,0,0,1,0,0],[0,1, 0,0,0,0,0,0],[1,0,0,0,0,0,0,0], [0,1, 0,0,0,0,0,0],[0,0, 0,0,0,1,0,0],[0,1, 0,0,0,0,0,0],[1,0,0,0,0,0,0,0], [0,1, 0,0,0,0,0,0],[1,0,0,0,0,0,0,0] ,  # k3_u
-        #                 [1,0,1,0,0,0,0,0],[1,0,0,1,0,0,0,0],[0,1,0,0,1,0,0,0],[0,0,1,0,0,1,0,0], [1,0,1,0,0,0,0,0],[1,0,0,1,0,0,0,0],[0,1,0,0,1,0,0,0],[0,0,1,0,0,1,0,0],  [0,1,0,0,1,0,0,0],[0,0,1,0,0,1,0,0] , # k1_e
-        #                 [0,0,0,0,0,0,1,0],[0,0,0,0,0,0,1,0],[0,0,0,0,0,0,1,0],[0,0,0,0,0,0,1,0], [0,0,0,0,0,0,1,0],[0,0,0,0,0,0,1,0],[0,0,0,0,0,0,1,0],[0,0,0,0,0,0,1,0],  [0,0,0,0,0,0,1,0],[0,0,0,0,0,0,1,0],  # k2_e
-        #                 [0,1,0,1,0,0,1,0],[1,0,1,0,0,0,1,0],[1,0,0,0,0,1,1,0],[0,1,0,0,1,0,1,0],[0,1,0,1,0,0,1,0],[1,0,1,0,0,0,1,0],[1,0,0,0,0,1,1,0],[0,1,0,0,1,0,1,0],[1,0,0,0,0,1,1,0],[0,1,0,0,1,0,1,0]])     # k3_e
+    os.makedirs("Pool", exist_ok=True)
+    positive_pool, negative_pool, visited_associations, global_best_feedback = _load_feedback_files("Pool")
+    positive_pool, negative_pool = _drop_iteration_entries(positive_pool, negative_pool, outer_iteration)
+    visited_associations = _rebuild_visited_associations(positive_pool, negative_pool)
+
+    outer = outer_solution.copy()
         
-        
-        
+    
+    # ch = np.ones((k_embb+k_urllc,RAT_num))
 
-        outer = np.concatenate([outer, outer[:, SixG_BSs_num+WiFi_BSs_num:RAT_num]], axis=1)
+    Inner = MyproblemInner(k_urllc,k_embb,RAT_num,seed,outer,channel,num_list,RAT_list)
+    population_best,fitness_best,CV_best,cost_urllc_best,fitness_generation_full  =  Inner.run_origin()
+    print(fitness_generation_full)
+    fitness_result_path = _write_fitness_result(
+        "Pool",
+        outer_iteration,
+        fitness_best,
+        CV_best,
+        cost_urllc_best,
+        fitness_generation_full,
+    )
+    metrics_result_path = _append_outer_iteration_metrics(
+        "Result",
+        outer_iteration,
+        seed,
+        Inner.best_metrics,
+    )
+    global_best_feedback = update_feedback_pools(
+        "Pool",
+        outer_iteration,
+        outer,
+        population_best,
+        fitness_best,
+        CV_best,
+        cost_urllc_best,
+        positive_pool,
+        negative_pool,
+        visited_associations,
+        global_best_feedback,
+    )
 
-        channel = np.loadtxt(
-            os.path.join("Channel", "channel_{}_{}.csv".format(k_urllc, k_embb)),
-            delimiter=",",
-            dtype=complex,
-        )
-        # print(channel)
-        # ch = np.ones((k_embb+k_urllc,RAT_num))
-
-        # optimize_joint=True: association + allocation 一起优化（association 为上行，卫星下行关联由上行卫星关联派生）
-        Inner = MyproblemInner(k_urllc, k_embb, RAT_num, seed, outer, channel, num_list, RAT_list, optimize_joint=True)
-        population_best,fitness_best,CV_best,cost_urllc_best,fitness_generation_full  =  Inner.run_origin()
-        # print(fitness_generation_full)
-        np.savetxt('Result_GA/fitness_generation_best_seed{}.csv'.format(seed),fitness_generation_full,delimiter=',')
-        _append_ga_metrics("Result_GA", seed, Inner.best_metrics)
-
+    feedback_path, summary_path = _write_feedback_files(
+        "Pool",
+        positive_pool,
+        negative_pool,
+        visited_associations,
+    )
+    print(f"Saved feedback pools to {feedback_path}")
+    print(f"Saved feedback summary to {summary_path}")
+    print(f"Saved best fitness value to {fitness_result_path}")
+    print(f"Saved outer iteration metrics to {metrics_result_path}")
 

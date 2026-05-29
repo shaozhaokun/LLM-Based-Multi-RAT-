@@ -1,0 +1,2 @@
+seed,urllc_outage_ratio,average_embb_delay,average_cost,best_fitness,cv,cost_urllc
+10,0.08333333333333333,0.32971348698594866,0.24819007682630767,29.78280921915692,0.0,10.0

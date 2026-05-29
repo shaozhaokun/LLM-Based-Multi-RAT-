@@ -330,7 +330,7 @@ class MyproblemInner:
         ub_mat = self.ub.reshape(self.K_total, self.RAT_num)
         return lb_mat, ub_mat
 
-    def crossover_joint(self, population_joint: np.ndarray, crossover_rate: float = 0.7, gene_rate: float = 0.8) -> np.ndarray:
+    def crossover_joint(self, population_joint: np.ndarray, crossover_rate: float = 0.1, gene_rate: float = 0.1) -> np.ndarray:
         """
         GA 交叉（参考 Single_GA 思路）：
         - 以 crossover_rate 选中父母对
@@ -453,7 +453,7 @@ class MyproblemInner:
             offspring = offspring * (np.ones((N, 1)) @ self.outer_ass)
         return offspring
 
-    def mutate_ga_allocation(self, population: np.ndarray, mutation_rate: float = 0.01) -> np.ndarray:
+    def mutate_ga_allocation(self, population: np.ndarray, mutation_rate: float = 0.1) -> np.ndarray:
         """
         allocation-only 的 GA 变异：以 mutation_rate 概率对每个 gene 重新随机采样，然后再乘 outer_ass 掩码。
         """
@@ -466,7 +466,7 @@ class MyproblemInner:
             mutated = mutated * (np.ones((N, 1)) @ self.outer_ass)
         return mutated
 
-    def de_like_mutate_band_joint(self, population_joint: np.ndarray, F: float = 0.8, rate: float = 0.8) -> np.ndarray:
+    def de_like_mutate_band_joint(self, population_joint: np.ndarray, F: float = 0.3, rate: float = 0.3) -> np.ndarray:
         """
         在 GA 的 joint 模式里加入“类似 DE 的翻转/差分扰动”：
         - 只对 allocation(band) 段做 DE 风格差分变异（a + F*(b-c) + 反射边界）
@@ -541,7 +541,7 @@ class MyproblemInner:
         return donor_matrix
 
     
-    def crossover(self, population_, mutant_population, CR=0.2):
+    def crossover(self, population_, mutant_population, CR=0.7):
         
         trial_population = np.copy(population_)  
 
@@ -1118,9 +1118,6 @@ class MyproblemInner:
             if self.optimize_joint:
                 population_cross = self.crossover_joint(population)
                 trial_population = self.mutate_joint(population_cross)
-                # 追加：DE-style 的连续“翻转/扰动”用于带宽段（保留 GA 的 association 搜索）
-                trial_population = self.de_like_mutate_band_joint(trial_population, F=0.3, rate=0.3)
-
                 _, _, pop_band = self._decode_joint(population)
                 _, _, trial_band = self._decode_joint(trial_population)
 
@@ -1141,6 +1138,7 @@ class MyproblemInner:
             # 可以根据更新后的适应度进行选择， 进行排序
             best_fitness , best_population, best_CV_pha,best_cost_urllc,best_trans, best_queue = self.select_based_on_fitness(best_population, best_fitness,best_CV_pha,best_cost_urllc,best_trans,best_queue) 
             # population_local,selected_fitness = self.select_based_on_fitness(population, fitness) 
+            population = best_population.copy()
 
             # 记录每一代的最优 allocation（保持与旧接口一致）
             if self.optimize_joint:
@@ -1219,7 +1217,7 @@ class MyproblemInner:
 
 def _append_ga_metrics(result_dir, seed, metrics):
     os.makedirs(result_dir, exist_ok=True)
-    metrics_path = os.path.join(result_dir, "ga_best_metrics.csv")
+    metrics_path = os.path.join(result_dir, "pure_ga_best_metrics.csv")
     fieldnames = [
         "seed",
         "urllc_outage_ratio",
@@ -1302,7 +1300,8 @@ if __name__=="__main__":
         Inner = MyproblemInner(k_urllc, k_embb, RAT_num, seed, outer, channel, num_list, RAT_list, optimize_joint=True)
         population_best,fitness_best,CV_best,cost_urllc_best,fitness_generation_full  =  Inner.run_origin()
         # print(fitness_generation_full)
-        np.savetxt('Result_GA/fitness_generation_best_seed{}.csv'.format(seed),fitness_generation_full,delimiter=',')
-        _append_ga_metrics("Result_GA", seed, Inner.best_metrics)
+        os.makedirs("Result_Pure_GA", exist_ok=True)
+        np.savetxt('Result_Pure_GA/fitness_generation_best_seed{}.csv'.format(seed),fitness_generation_full,delimiter=',')
+        _append_ga_metrics("Result_Pure_GA", seed, Inner.best_metrics)
 
 
