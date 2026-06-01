@@ -3,7 +3,6 @@ import random
 import pandas as pd
 import os
 import csv
-import hashlib
 import json
 from Scheduling import queue_delay_calculation
 
@@ -946,150 +945,6 @@ def _scalar(value):
     return float(np.asarray(value).reshape(-1)[0])
 
 
-def _association_key(association):
-    association = np.asarray(association, dtype=np.int8)
-    return hashlib.sha1(association.tobytes()).hexdigest()
-
-
-def _load_feedback_files(pool_dir):
-    feedback_path = os.path.join(pool_dir, "feedback_pools.json")
-    if not os.path.exists(feedback_path):
-        return [], [], {}, {"fitness": float("inf"), "iteration": None}
-
-    with open(feedback_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    positive_pool = data.get("positive_pool", [])
-    negative_pool = data.get("negative_pool", [])
-    visited_associations = data.get("visited_associations", {})
-    best_entry = min(
-        positive_pool,
-        key=lambda item: item.get("fitness", float("inf")),
-        default=None,
-    )
-    if best_entry is None:
-        global_best = {"fitness": float("inf"), "iteration": None}
-    else:
-        global_best = {
-            "fitness": float(best_entry.get("fitness", float("inf"))),
-            "iteration": best_entry.get("outer_iteration"),
-        }
-    return positive_pool, negative_pool, visited_associations, global_best
-
-
-def _save_feedback_snapshot(pool_dir, outer_iteration, association, bandwidth, fitness, cv, cost_urllc, pool_name, reason):
-    association_key = _association_key(association)
-    association_path = os.path.join(pool_dir, f"association_iteration{outer_iteration}.npy")
-    bandwidth_path = os.path.join(pool_dir, f"bandwidth_iteration{outer_iteration}.npy")
-    np.save(association_path, np.asarray(association, dtype=np.int8))
-    np.save(bandwidth_path, np.asarray(bandwidth, dtype=float))
-
-    return {
-        "outer_iteration": int(outer_iteration),
-        "association_key": association_key,
-        "association_path": association_path,
-        "bandwidth_path": bandwidth_path,
-        "fitness": _scalar(fitness),
-        "cv": _scalar(cv),
-        "cost_urllc": _scalar(cost_urllc),
-        "pool": pool_name,
-        "reason": reason,
-    }
-
-
-def _write_feedback_files(pool_dir, positive_pool, negative_pool, visited_associations):
-    feedback_path = os.path.join(pool_dir, "feedback_pools.json")
-    with open(feedback_path, "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "positive_pool": positive_pool,
-                "negative_pool": negative_pool,
-                "visited_associations": visited_associations,
-            },
-            f,
-            indent=2,
-        )
-
-    summary_path = os.path.join(pool_dir, "feedback_summary.csv")
-    rows = positive_pool + negative_pool
-    with open(summary_path, "w", newline="", encoding="utf-8") as f:
-        fieldnames = ["outer_iteration", "pool", "association_key", "fitness", "cv", "cost_urllc", "reason"]
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({name: row.get(name) for name in fieldnames})
-
-    return feedback_path, summary_path
-
-
-def _drop_iteration_entries(positive_pool, negative_pool, outer_iteration):
-    def keep_other_iteration(entry):
-        return entry.get("outer_iteration") != outer_iteration
-
-    return (
-        [entry for entry in positive_pool if keep_other_iteration(entry)],
-        [entry for entry in negative_pool if keep_other_iteration(entry)],
-    )
-
-
-def _rebuild_visited_associations(positive_pool, negative_pool):
-    visited_associations = {}
-    for entry in positive_pool + negative_pool:
-        association_key = entry.get("association_key")
-        if association_key:
-            visited_associations[association_key] = visited_associations.get(association_key, 0) + 1
-    return visited_associations
-
-
-def update_feedback_pools(
-    pool_dir,
-    outer_iteration,
-    association,
-    bandwidth,
-    fitness,
-    cv,
-    cost_urllc,
-    positive_pool,
-    negative_pool,
-    visited_associations,
-    global_best,
-):
-    association_key = _association_key(association)
-    visited_associations[association_key] = visited_associations.get(association_key, 0) + 1
-
-    fitness_value = _scalar(fitness)
-    cv_value = _scalar(cv)
-    if cv_value == 0.0 and fitness_value < global_best["fitness"]:
-        global_best["fitness"] = fitness_value
-        global_best["iteration"] = int(outer_iteration)
-        pool_name = "positive"
-        reason = "new_global_best"
-    elif cv_value == 0.0:
-        pool_name = "negative"
-        reason = "feasible_but_not_improved"
-    else:
-        pool_name = "negative"
-        reason = "constraint_violation"
-
-    entry = _save_feedback_snapshot(
-        pool_dir,
-        outer_iteration,
-        association,
-        bandwidth,
-        fitness,
-        cv,
-        cost_urllc,
-        pool_name,
-        reason,
-    )
-    if pool_name == "positive":
-        positive_pool.append(entry)
-    else:
-        negative_pool.append(entry)
-
-    return global_best
-
-
 def _write_fitness_result(pool_dir, outer_iteration, fitness_best, cv_best, cost_urllc_best, fitness_generation_full):
     best_fitness_value = _scalar(fitness_best)
     result = {
@@ -1272,12 +1127,12 @@ if __name__=="__main__":
     _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     os.chdir(_BASE_DIR)
 
-    k1_u = 20
-    k2_u = 20
-    k3_u = 20
-    k1_e = 20
-    k2_e = 20
-    k3_e = 20
+    k1_u = 30
+    k2_u = 30
+    k3_u = 30
+    k1_e = 30
+    k2_e = 30
+    k3_e = 30
     k_embb = k1_e + k2_e + k3_e 
     k_urllc = k1_u + k2_u + k3_u 
     num_list =[k1_u,k2_u,k3_u,k1_e,k2_e,k3_e]
@@ -1293,8 +1148,10 @@ if __name__=="__main__":
     seed = 42
     np.random.seed(seed)
     random.seed(seed)
-    outer_iteration = 1
-    pool_dir = os.path.join("Pool", f"Outer{outer_iteration}")
+    outer_iteration = 2
+    scale = k_urllc + k_embb
+    solution_dir = os.path.join("Solution", str(scale))
+    pool_dir = os.path.join("Pool", str(scale), f"Outer{outer_iteration}")
 
 
 
@@ -1302,16 +1159,16 @@ if __name__=="__main__":
     # 直接从 Solution/*_offloading_decision.csv 构造 outer（更简单，不需要先生成 outer_association.npy）
     outer_solution = build_outer_from_offloading_decision(
         urllc_csv_path=_first_existing_path(
-            os.path.join("Solution", f"Outer_{outer_iteration}", f"urllc_offloading_decision_{k_urllc}.csv"),
-            os.path.join("Solution", f"Outer_{outer_iteration}", "urllc_offloading_decision.csv"),
-            os.path.join("Solution", f"urllc_offloading_decision_{k_urllc}.csv"),
-            os.path.join("Solution", "urllc_offloading_decision.csv"),
+            os.path.join(solution_dir, f"Outer_{outer_iteration}", f"urllc_offloading_decision_{k_urllc}.csv"),
+            os.path.join(solution_dir, f"Outer_{outer_iteration}", "urllc_offloading_decision.csv"),
+            os.path.join(solution_dir, f"urllc_offloading_decision_{k_urllc}.csv"),
+            os.path.join(solution_dir, "urllc_offloading_decision.csv"),
         ),
         embb_csv_path=_first_existing_path(
-            os.path.join("Solution", f"Outer_{outer_iteration}", f"embb_offloading_decision_{k_embb}.csv"),
-            os.path.join("Solution", f"Outer_{outer_iteration}", "embb_offloading_decision.csv"),
-            os.path.join("Solution", f"embb_offloading_decision_{k_embb}.csv"),
-            os.path.join("Solution", "embb_offloading_decision.csv"),
+            os.path.join(solution_dir, f"Outer_{outer_iteration}", f"embb_offloading_decision_{k_embb}.csv"),
+            os.path.join(solution_dir, f"Outer_{outer_iteration}", "embb_offloading_decision.csv"),
+            os.path.join(solution_dir, f"embb_offloading_decision_{k_embb}.csv"),
+            os.path.join(solution_dir, "embb_offloading_decision.csv"),
         ),
         # 数量如果要改：去 build_outer_from_offloading_decision.py 里改默认值即可
     )
@@ -1361,7 +1218,7 @@ if __name__=="__main__":
         fitness_generation_full,
     )
     metrics_result_path = _append_outer_iteration_metrics(
-        pool_dir,
+        "Result",
         outer_iteration,
         seed,
         Inner.best_metrics,

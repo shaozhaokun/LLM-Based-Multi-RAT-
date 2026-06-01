@@ -83,7 +83,7 @@ class MyproblemInner:
         self.outer_ass_ = outer_ass  #  (,D) 
         self.ch = ch   # channel ((eMBB+URLLC),RAT_num)
         self.population_size = 10  # inner individual
-        self.generation = 1000        # inner generation
+        self.generation = 1000       # inner generation
         self.embb = eMBB_num * self.RAT_num
         self.num_list = num_list   # [k1_u,k2_u,k3_u,k1_e,k2_e,k3_e]
         self.RAT_list = RAT_list   # [6G_BSs_num,Wi-Fi_BSs_num,Satellite_BSs_num]
@@ -122,13 +122,28 @@ class MyproblemInner:
 
 
         
-        self.W_6g_ = 45 * 1e5   
-        self.W_wifi_ = 15 * 1e5    
+        # self.W_6g_ = 45 * 1e5   
+        # self.W_wifi_ = 15 * 1e5    
 
-        self.W_sat_eMBB_up = 3* 1e5    
-        self.W_sat_URLLC_up = 3* 1e5    
-        self.W_sat_URLLC_down = 3* 1e5     # urllc 和 embb 进行分开分配
-        self.W_sat_eMBB_down = 3* 1e5
+        # self.W_sat_eMBB_up = 3* 1e5    
+        # self.W_sat_URLLC_up = 3* 1e5    
+        # self.W_sat_URLLC_down = 3* 1e5     # urllc 和 embb 进行分开分配
+        # self.W_sat_eMBB_down = 3* 1e5
+
+        self.W_6g = 300 * 1e6     # 50 MHz
+        self.W_wifi = 160 * 1e6     # 10 MHz
+        self.W_sat_Up = 20 * 1e6     # 30 MHz   
+        self.W_sat_Down = 20 * 1e6     # 30 MHz 卫星上行和下行的带宽是分开的
+
+
+        
+        self.W_6g_ = 50 * 1e5   
+        self.W_wifi_ = 20 * 1e5    
+
+        self.W_sat_eMBB_up = 6* 1e5    
+        self.W_sat_URLLC_up = 6* 1e5    
+        self.W_sat_URLLC_down = 6* 1e5     # urllc 和 embb 进行分开分配
+        self.W_sat_eMBB_down = 6* 1e5
         
         # URLLC下行功率 (每个卫星BS的URLLC下行传输功率，单位：W)
         self.L_sat_URLLC_down = 100.0  # 1 W，可根据实际模型调整    
@@ -377,7 +392,7 @@ class MyproblemInner:
     
     
 
-    def mutate(self, population, F=0.1):
+    def mutate(self, population, F=0.7):
         F_matrix_ = F * np.ones((self.population_size,1))    # N_2 x 1
         F_matrix =  F_matrix_ @ np.ones((1, self.chromosome_length))  # N_2 x D
         

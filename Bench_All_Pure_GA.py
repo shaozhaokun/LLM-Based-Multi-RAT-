@@ -119,13 +119,22 @@ class MyproblemInner:
 
 
         
-        self.W_6g_ = 20 * 1e5   
-        self.W_wifi_ = 10 * 1e5    
+        # self.W_6g_ = 20 * 1e5   
+        # self.W_wifi_ = 10 * 1e5    
 
-        self.W_sat_eMBB_up = 3* 1e5    
-        self.W_sat_URLLC_up = 3* 1e5    
-        self.W_sat_URLLC_down = 3* 1e5     # urllc 和 embb 进行分开分配
-        self.W_sat_eMBB_down = 3* 1e5
+        # self.W_sat_eMBB_up = 3* 1e5    
+        # self.W_sat_URLLC_up = 3* 1e5    
+        # self.W_sat_URLLC_down = 3* 1e5     # urllc 和 embb 进行分开分配
+        # self.W_sat_eMBB_down = 3* 1e5
+
+        self.W_6g_ = 50 * 1e5   
+        self.W_wifi_ = 20 * 1e5    
+
+        self.W_sat_eMBB_up = 6* 1e5    
+        self.W_sat_URLLC_up = 6* 1e5    
+        self.W_sat_URLLC_down = 6* 1e5     # urllc 和 embb 进行分开分配
+        self.W_sat_eMBB_down = 6* 1e5
+        
         
         # URLLC下行功率 (每个卫星BS的URLLC下行传输功率，单位：W)
         self.L_sat_URLLC_down = 100.0  # 1 W，可根据实际模型调整    
@@ -504,7 +513,7 @@ class MyproblemInner:
     
     
 
-    def mutate(self, population, F=0.5):
+    def mutate(self, population, F=0.8):
         F_matrix_ = F * np.ones((self.population_size,1))    # N_2 x 1
         F_matrix =  F_matrix_ @ np.ones((1, self.chromosome_length))  # N_2 x D
         

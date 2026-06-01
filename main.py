@@ -940,7 +940,7 @@ def _write_fitness_result(pool_dir, outer_iteration, fitness_best, cv_best, cost
     }
 
     result_path = os.path.join(pool_dir, f"best_fitness_iteration{outer_iteration}.json")
-    with open(result_path, "w", encoding="utf-8") as f:
+    with open(result_path, "w", encoding="-8") as f:
         json.dump(result, f, indent=2)
 
     np.savetxt(
@@ -984,7 +984,7 @@ def _append_outer_iteration_metrics(result_dir, outer_iteration, seed, metrics):
     ]
     write_header = not os.path.exists(metrics_path) or os.path.getsize(metrics_path) == 0
 
-    with open(metrics_path, "a", newline="", encoding="utf-8") as f:
+    with open(metrics_path, "a", newline="", encoding="-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         if write_header:
             writer.writeheader()
@@ -1052,14 +1052,17 @@ if __name__=="__main__":
     _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     os.chdir(_BASE_DIR)
 
-    k1_u = 20
-    k2_u = 20
-    k3_u = 20
-    k1_e = 20
-    k2_e = 20
-    k3_e = 20
+    k1_u = 30
+    k2_u = 30
+    k3_u = 30
+    k1_e = 30
+    k2_e = 30
+    k3_e = 30
     k_embb = k1_e + k2_e + k3_e 
     k_urllc = k1_u + k2_u + k3_u 
+    scale = k_urllc + k_embb
+    solution_dir = os.path.join("Solution", str(scale))
+    pool_dir = os.path.join("Pool", str(scale))
     num_list =[k1_u,k2_u,k3_u,k1_e,k2_e,k3_e]
 
     SixG_BSs_num = 2
@@ -1079,13 +1082,19 @@ if __name__=="__main__":
     # 直接从 Solution/*_offloading_decision.csv 构造 outer（更简单，不需要先生成 outer_association.npy）
     outer_solution = build_outer_from_offloading_decision(
         urllc_csv_path=_first_existing_path(
-            os.path.join("Solution", f"Outer_{outer_iteration}", f"urllc_offloading_decision_{k_urllc}.csv"),
+            os.path.join(solution_dir, f"Outer_{outer_iteration}", f"urllc_offloading_decision_{k_urllc}.csv"),
+            os.path.join(solution_dir, f"Outer_{outer_iteration}", "urllc_offloading_decision.csv"),
+            os.path.join(solution_dir, f"urllc_offloading_decision_{k_urllc}.csv"),
+            os.path.join(solution_dir, "urllc_offloading_decision.csv"),
             os.path.join("Solution", f"Outer_{outer_iteration}", "urllc_offloading_decision.csv"),
             os.path.join("Solution", f"urllc_offloading_decision_{k_urllc}.csv"),
             os.path.join("Solution", "urllc_offloading_decision.csv"),
         ),
         embb_csv_path=_first_existing_path(
-            os.path.join("Solution", f"Outer_{outer_iteration}", f"embb_offloading_decision_{k_embb}.csv"),
+            os.path.join(solution_dir, f"Outer_{outer_iteration}", f"embb_offloading_decision_{k_embb}.csv"),
+            os.path.join(solution_dir, f"Outer_{outer_iteration}", "embb_offloading_decision.csv"),
+            os.path.join(solution_dir, f"embb_offloading_decision_{k_embb}.csv"),
+            os.path.join(solution_dir, "embb_offloading_decision.csv"),
             os.path.join("Solution", f"Outer_{outer_iteration}", "embb_offloading_decision.csv"),
             os.path.join("Solution", f"embb_offloading_decision_{k_embb}.csv"),
             os.path.join("Solution", "embb_offloading_decision.csv"),
@@ -1119,8 +1128,8 @@ if __name__=="__main__":
 
     # seed = np.random.seed(42)
     # outer= np.ones((k_urllc+k_embb,RAT_num))   # LLM (GPT),association  
-    os.makedirs("Pool", exist_ok=True)
-    positive_pool, negative_pool, visited_associations, global_best_feedback = _load_feedback_files("Pool")
+    os.makedirs(pool_dir, exist_ok=True)
+    positive_pool, negative_pool, visited_associations, global_best_feedback = _load_feedback_files(pool_dir)
     positive_pool, negative_pool = _drop_iteration_entries(positive_pool, negative_pool, outer_iteration)
     visited_associations = _rebuild_visited_associations(positive_pool, negative_pool)
 
@@ -1133,7 +1142,7 @@ if __name__=="__main__":
     population_best,fitness_best,CV_best,cost_urllc_best,fitness_generation_full  =  Inner.run_origin()
     print(fitness_generation_full)
     fitness_result_path = _write_fitness_result(
-        "Pool",
+        pool_dir,
         outer_iteration,
         fitness_best,
         CV_best,
@@ -1148,7 +1157,7 @@ if __name__=="__main__":
         best_metrics,
     )
     global_best_feedback = update_feedback_pools(
-        "Pool",
+        pool_dir,
         outer_iteration,
         outer,
         population_best,
@@ -1162,7 +1171,7 @@ if __name__=="__main__":
     )
 
     feedback_path, summary_path = _write_feedback_files(
-        "Pool",
+        pool_dir,
         positive_pool,
         negative_pool,
         visited_associations,

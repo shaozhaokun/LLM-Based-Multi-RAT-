@@ -1,6 +1,6 @@
 import os
 import re
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 import pandas as pd
@@ -160,9 +160,9 @@ def build_outer_from_offloading_decision(
 
 def build_and_save_outer_solution_csv(
     outer_iteration: int = 0,
-    urllc_csv_path: str | None = None,
-    embb_csv_path: str | None = None,
-    out_csv_path: str | None = None,
+    urllc_csv_path: Optional[str] = None,
+    embb_csv_path: Optional[str] = None,
+    out_csv_path: Optional[str] = None,
     sixg_num: int = 2,
     wifi_num: int = 4,
     sat_num: int = 2,
@@ -197,7 +197,7 @@ if __name__ == "__main__":
     _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     os.chdir(_BASE_DIR)
 
-    outer_iteration = 1
+    outer_iteration = 3
     outer = build_and_save_outer_solution_csv(
         outer_iteration=outer_iteration,
         # 数量想改就改这里（或直接改函数默认值）
