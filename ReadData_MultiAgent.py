@@ -155,10 +155,22 @@ def process_multiagent_result_dir(result_dir, metric_name="BestValue"):
 if __name__ == "__main__":
     base_dir = os.path.dirname(os.path.abspath(__file__))
     os.chdir(base_dir)
+    
 
-    root_dir = "Result_MultiAgent"
+    # 读 正常的文件
+    # root_dir = "Result_MultiAgent"
+    # metric_name = "BestValue"
+    # # for result_dir in discover_multiagent_result_dirs(root_dir):
+    # #     process_multiagent_result_dir(result_dir, metric_name=metric_name)
+    # result_dir = os.path.join(root_dir, "360")
+    # process_multiagent_result_dir(result_dir, metric_name=metric_name)
+
+
+
+
+    root_dir = "Result_hybrid/hybrid2(10_10_40)/Result_MultiAgent"
     metric_name = "BestValue"
     # for result_dir in discover_multiagent_result_dirs(root_dir):
     #     process_multiagent_result_dir(result_dir, metric_name=metric_name)
-    result_dir = os.path.join(root_dir, "360")
+    result_dir = os.path.join(root_dir, "30")
     process_multiagent_result_dir(result_dir, metric_name=metric_name)

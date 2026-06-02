@@ -72,7 +72,9 @@ if __name__ == "__main__":
     base_dir = os.path.dirname(os.path.abspath(__file__))
     os.chdir(base_dir)
 
-    result_dir = "Result_Pure_GA/180"
+    # result_dir = "Result_Pure_GA/180"
+    result_dir = "Result_hybrid/hybrid1(30_30_0)/Result_Pure_GA"
+
 
     seed_df, summary_df = read_average_values(result_dir)
     output_path = os.path.join(result_dir, "fitness_generation_selected_average.csv")

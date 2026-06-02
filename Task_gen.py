@@ -52,13 +52,15 @@ class TaskGenerator:
         os.makedirs("Data", exist_ok=True)
 
         # 统一使用新版命名（不带下划线结尾）
-        urllc_df.to_csv(f"Data/urllc_tasks_{self.num_urllc_users}.csv", index=False)
-        embb_df.to_csv(f"Data/embb_tasks_{self.num_embb_users}.csv", index=False)
+        # urllc_df.to_csv(f"Data/urllc_tasks_{self.num_urllc_users}.csv", index=False)
+        # embb_df.to_csv(f"Data/embb_tasks_{self.num_embb_users}.csv", index=False)
+        urllc_df.to_csv(f"Test_Data/Data/urllc_tasks_{self.num_urllc_users}.csv", index=False)
+        embb_df.to_csv(f"Test_Data/Data/embb_tasks_{self.num_embb_users}.csv", index=False)
 
         print("URLLC/eMBB tasks saved to Data/urllc_tasks_{n}.csv and Data/embb_tasks_{n}.csv.")
 
 
 if __name__ == "__main__":
     # 使用示例（仅脚本直接运行时才会执行；import 不会自动生成任务）
-    task_generator = TaskGenerator(num_urllc_users=180, num_embb_users=180)
+    task_generator = TaskGenerator(num_urllc_users=90, num_embb_users=30)
     task_generator.save_tasks_to_csv()

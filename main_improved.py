@@ -29,7 +29,7 @@ class MyproblemInner:
         self.outer_ass_ = outer_ass  #  (,D) 
         self.ch = ch   # channel ((eMBB+URLLC),RAT_num)
         self.population_size = 20  # inner individual
-        self.generation = 200        # inner generation
+        self.generation = 300        # inner generation
         self.embb = eMBB_num * self.RAT_num
         self.num_list = num_list   # [k1_u,k2_u,k3_u,k1_e,k2_e,k3_e]
         self.RAT_list = RAT_list   # [6G_BSs_num,Wi-Fi_BSs_num,Satellite_BSs_num]
@@ -51,10 +51,17 @@ class MyproblemInner:
         self.W_6g_ = 50 * 1e5   
         self.W_wifi_ = 25* 1e5    
 
-        self.W_sat_eMBB_up = 6* 1e5    
-        self.W_sat_URLLC_up = 6* 1e5    
-        self.W_sat_URLLC_down = 6* 1e5     # urllc 和 embb 进行分开分配
-        self.W_sat_eMBB_down = 6* 1e5
+   
+
+        self.W_sat_eMBB_up = 3* 1e5    
+        self.W_sat_URLLC_up = 3* 1e5    
+        self.W_sat_URLLC_down = 3* 1e5     # urllc 和 embb 进行分开分配
+        self.W_sat_eMBB_down = 3* 1e5
+
+        # self.W_sat_eMBB_up = 6* 1e5    
+        # self.W_sat_URLLC_up = 6* 1e5    
+        # self.W_sat_URLLC_down = 6* 1e5     # urllc 和 embb 进行分开分配
+        # self.W_sat_eMBB_down = 6* 1e5
         
         # URLLC下行功率 (每个卫星BS的URLLC下行传输功率，单位：W)
         self.L_sat_URLLC_down = 100.0  # 1 W，可根据实际模型调整    
@@ -1127,12 +1134,12 @@ if __name__=="__main__":
     _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     os.chdir(_BASE_DIR)
 
-    k1_u = 30
-    k2_u = 30
-    k3_u = 30
-    k1_e = 30
-    k2_e = 30
-    k3_e = 30
+    k1_u = 60
+    k2_u = 60
+    k3_u = 60
+    k1_e = 60
+    k2_e = 60
+    k3_e = 60
     k_embb = k1_e + k2_e + k3_e 
     k_urllc = k1_u + k2_u + k3_u 
     num_list =[k1_u,k2_u,k3_u,k1_e,k2_e,k3_e]
@@ -1148,7 +1155,7 @@ if __name__=="__main__":
     seed = 42
     np.random.seed(seed)
     random.seed(seed)
-    outer_iteration = 2
+    outer_iteration = 0
     scale = k_urllc + k_embb
     solution_dir = os.path.join("Solution", str(scale))
     pool_dir = os.path.join("Pool", str(scale), f"Outer{outer_iteration}")

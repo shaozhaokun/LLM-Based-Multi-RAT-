@@ -367,12 +367,12 @@ def _complex_matrix_to_str(mat: np.ndarray) -> np.ndarray:
 def main():
     import os
 
-    k1_u = 60
-    k2_u = 60
-    k3_u = 60
-    k1_e = 60
-    k2_e = 60
-    k3_e = 60
+    k1_u = 10
+    k2_u = 10
+    k3_u = 10
+    k1_e = 30
+    k2_e = 30
+    k3_e = 30
 
     k_urllc = k1_u + k2_u + k3_u
     k_embb = k1_e + k2_e + k3_e
@@ -401,10 +401,22 @@ def main():
     os.makedirs("Data", exist_ok=True)
     os.makedirs("Channel", exist_ok=True)
 
-    # np.save(os.path.join("Data", "channel_{}_{}.npy".format(k_urllc, k_embb)), channel)
-    # np.save(os.path.join("Data", "user_position_{}_{}.npy".format(k_urllc, k_embb)), user_positions)
+    # np.savetxt(
+    #     os.path.join("Channel", "channel_{}_{}.csv".format(k_urllc, k_embb)),
+    #     _complex_matrix_to_str(channel),
+    #     delimiter=",",
+    #     fmt="%s",
+    # )
+
+    # channel_urllc = channel[:k_urllc, :]
+    # channel_embb = channel[k_urllc:, :]
+
+    # np.savetxt("Channel/channel_URLLC_{}_{}.csv".format(k_urllc, k_embb), _complex_matrix_to_str(channel_urllc), delimiter=",", fmt="%s")
+    # np.savetxt("Channel/channel_eMBB_{}_{}.csv".format(k_urllc, k_embb), _complex_matrix_to_str(channel_embb), delimiter=",", fmt="%s")
+
+
     np.savetxt(
-        os.path.join("Channel", "channel_{}_{}.csv".format(k_urllc, k_embb)),
+        os.path.join("Test_Data/Channel", "channel_{}_{}.csv".format(k_urllc, k_embb)),
         _complex_matrix_to_str(channel),
         delimiter=",",
         fmt="%s",
@@ -413,8 +425,10 @@ def main():
     channel_urllc = channel[:k_urllc, :]
     channel_embb = channel[k_urllc:, :]
 
-    np.savetxt("Channel/channel_URLLC_{}_{}.csv".format(k_urllc, k_embb), _complex_matrix_to_str(channel_urllc), delimiter=",", fmt="%s")
-    np.savetxt("Channel/channel_eMBB_{}_{}.csv".format(k_urllc, k_embb), _complex_matrix_to_str(channel_embb), delimiter=",", fmt="%s")
+    np.savetxt("Test_Data/Channel/channel_URLLC_{}_{}.csv".format(k_urllc, k_embb), _complex_matrix_to_str(channel_urllc), delimiter=",", fmt="%s")
+    np.savetxt("Test_Data/Channel/channel_eMBB_{}_{}.csv".format(k_urllc, k_embb), _complex_matrix_to_str(channel_embb), delimiter=",", fmt="%s")
+
+
 
     print("Channel files saved to Channel/.")
     print("Data files saved to Data/.")
