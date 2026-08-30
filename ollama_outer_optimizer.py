@@ -26,9 +26,19 @@ K_EMBB = 150
 SCALE = K_URLLC + K_EMBB
 BS_CODES = ("G1", "G2", "W1", "W2", "W3", "W4", "S1", "S2")
 
+
+def configure_scale(users_per_service: int) -> None:
+    """Configure an equal URLLC/eMBB scale with three equal user regions."""
+    if users_per_service <= 0 or users_per_service % 3 != 0:
+        raise ValueError("users_per_service must be a positive multiple of 3")
+    global K_URLLC, K_EMBB, SCALE
+    K_URLLC = int(users_per_service)
+    K_EMBB = int(users_per_service)
+    SCALE = K_URLLC + K_EMBB
+
 SYSTEM_PROMPT = r"""You are the outer association optimizer for a multi-RAT mobile edge computing (MEC) system.
 
-Your task is to generate an offloading association for 150 URLLC tasks and 150 eMBB tasks. Continuous communication-resource allocation is subsequently optimized by an inner evolutionary computation (EC) algorithm. Therefore, optimize only the discrete BS association decisions.
+Your task is to generate an offloading association for __K_URLLC__ URLLC tasks and __K_EMBB__ eMBB tasks. Continuous communication-resource allocation is subsequently optimized by an inner evolutionary computation (EC) algorithm. Therefore, optimize only the discrete BS association decisions.
 
 Optimization objective:
 - Minimize the heterogeneous-task cost.
@@ -42,9 +52,9 @@ BS codes:
 - S1, S2: satellite BSs.
 
 For each service type, the candidate BS set is:
-- Users 1--50: G1, G2, W1, W2, W3, W4.
-- Users 51--100: S1, S2.
-- Users 101--150: G1, G2, W1, W2, W3, W4, S1, S2.
+- Users 1--__R1_END__: G1, G2, W1, W2, W3, W4.
+- Users __R2_START__--__R2_END__: S1, S2.
+- Users __R3_START__--__K_URLLC__: G1, G2, W1, W2, W3, W4, S1, S2.
 
 Each URLLC task must select exactly one candidate BS. Each eMBB task may select multiple candidate BSs, but at most one 6G BS, at most one WiFi BS, at most one satellite BS, and at least one BS in total.
 
@@ -60,13 +70,13 @@ Network configuration:
 - Cloud scheduling: Moore-Hodgson for URLLC and SPT for eMBB.
 
 Compact data format:
-- Rows follow users 1--150; indices are omitted.
+- Rows follow users 1--__K_URLLC__; indices are omitted.
 - E_TASK row: [input_data_size_bits].
 - U_TASK row: [input_data_size_bits, hard_deadline_ms].
 - E_UL_GAIN_DB and U_UL_GAIN_DB are uplink channel power gains in dB.
-- Rows 1--50 have columns [G1,G2,W1,W2,W3,W4].
-- Rows 51--100 have columns [S1,S2].
-- Rows 101--150 have columns [G1,G2,W1,W2,W3,W4,S1,S2].
+- Rows 1--__R1_END__ have columns [G1,G2,W1,W2,W3,W4].
+- Rows __R2_START__--__R2_END__ have columns [S1,S2].
+- Rows __R3_START__--__K_URLLC__ have columns [G1,G2,W1,W2,W3,W4,S1,S2].
 - SAT_DOWN_GAIN_DB is [S1-to-cloud,S2-to-cloud] and is global.
 
 <E_TASK>
@@ -95,7 +105,7 @@ Return exactly two variables and no explanation:
 urllc_offloading_decision = [...]
 embb_offloading_decision = [...]
 
-The URLLC list must contain exactly 150 BS-code strings. The eMBB list must contain exactly 150 lists of BS-code strings and obey all candidate and per-RAT constraints.
+The URLLC list must contain exactly __K_URLLC__ BS-code strings. The eMBB list must contain exactly __K_EMBB__ lists of BS-code strings and obey all candidate and per-RAT constraints.
 """
 
 INITIAL_USER_PROMPT = """Construct an initial high-quality association from the supplied task and channel data. Account for channel quality and load balancing rather than assigning every user to the same strongest RAT. Return only the two requested variables."""
@@ -134,28 +144,35 @@ def _format_rows(rows: Iterable[Iterable[float]], decimals: int = 3) -> str:
 
 
 def _candidate_columns(user_index: int) -> slice:
-    if user_index < 50:
+    region_size = K_URLLC // 3
+    if user_index < region_size:
         return slice(0, 6)
-    if user_index < 100:
+    if user_index < 2 * region_size:
         return slice(6, 8)
     return slice(0, 8)
 
 
-def build_quantification_system_prompt() -> str:
+def build_quantification_system_prompt(gain_decimals: int = 1) -> str:
+    if gain_decimals < 0:
+        raise ValueError("gain_decimals must be nonnegative")
     embb_path = BASE_DIR / "Data" / f"embb_tasks_{K_EMBB}.csv"
     urllc_path = BASE_DIR / "Data" / f"urllc_tasks_{K_URLLC}.csv"
-    channel_path = BASE_DIR / "Channel" / f"channel_{K_URLLC}_{K_EMBB}.csv"
-    for path in (embb_path, urllc_path, channel_path):
+    channel_u_path = BASE_DIR / "Channel" / f"channel_URLLC_{K_URLLC}_{K_EMBB}.csv"
+    channel_e_path = BASE_DIR / "Channel" / f"channel_eMBB_{K_URLLC}_{K_EMBB}.csv"
+    for path in (embb_path, urllc_path, channel_u_path, channel_e_path):
         if not path.exists():
             raise FileNotFoundError(f"Missing quantification input: {path}")
 
     embb = pd.read_csv(embb_path)
     urllc = pd.read_csv(urllc_path)
-    channel = np.loadtxt(channel_path, delimiter=",", dtype=complex)
+    channel_u = np.loadtxt(channel_u_path, delimiter=",", dtype=complex)
+    channel_e = np.loadtxt(channel_e_path, delimiter=",", dtype=complex)
     if len(embb) != K_EMBB or len(urllc) != K_URLLC:
-        raise ValueError(f"Expected 150+150 tasks, got {len(urllc)}+{len(embb)}")
-    if channel.shape[0] != SCALE or channel.shape[1] < 10:
-        raise ValueError(f"Expected channel shape (300, >=10), got {channel.shape}")
+        raise ValueError(f"Expected {K_URLLC}+{K_EMBB} tasks, got {len(urllc)}+{len(embb)}")
+    if channel_u.shape != (K_URLLC, 10):
+        raise ValueError(f"Expected URLLC channel shape {(K_URLLC, 10)}, got {channel_u.shape}")
+    if channel_e.shape != (K_EMBB, 10):
+        raise ValueError(f"Expected eMBB channel shape {(K_EMBB, 10)}, got {channel_e.shape}")
 
     e_task = "\n".join(f"[{int(v)}]" for v in embb["Data Size (bits)"].to_numpy())
     u_task = "\n".join(
@@ -163,18 +180,30 @@ def build_quantification_system_prompt() -> str:
         for bits, deadline in zip(urllc["Data Size (bits)"], urllc["Deadline (s)"])
     )
 
-    u_gain = _power_gain_db(channel[:K_URLLC, :8])
-    e_gain = _power_gain_db(channel[K_URLLC:, :8])
+    u_gain = _power_gain_db(channel_u[:, :8])
+    e_gain = _power_gain_db(channel_e[:, :8])
     u_rows = [u_gain[i, _candidate_columns(i)] for i in range(K_URLLC)]
     e_rows = [e_gain[i, _candidate_columns(i)] for i in range(K_EMBB)]
-    sat_down = _power_gain_db(channel[0, 8:10]).reshape(1, -1)
+    sat_down_coeff = channel_u[0, 8:10]
+    if not np.allclose(channel_u[:, 8:10], sat_down_coeff, rtol=1e-10, atol=1e-15):
+        raise ValueError("URLLC satellite-to-cloud columns are not global/identical")
+    if not np.allclose(channel_e[:, 8:10], sat_down_coeff, rtol=1e-10, atol=1e-15):
+        raise ValueError("eMBB satellite-to-cloud columns differ from the URLLC global values")
+    sat_down = _power_gain_db(sat_down_coeff).reshape(1, -1)
 
+    region_size = K_URLLC // 3
     replacements = {
+        "__K_URLLC__": str(K_URLLC),
+        "__K_EMBB__": str(K_EMBB),
+        "__R1_END__": str(region_size),
+        "__R2_START__": str(region_size + 1),
+        "__R2_END__": str(2 * region_size),
+        "__R3_START__": str(2 * region_size + 1),
         "__E_TASK__": e_task,
         "__U_TASK__": u_task,
-        "__E_UL_GAIN_DB__": _format_rows(e_rows),
-        "__U_UL_GAIN_DB__": _format_rows(u_rows),
-        "__SAT_DOWN_GAIN_DB__": _format_rows(sat_down),
+        "__E_UL_GAIN_DB__": _format_rows(e_rows, gain_decimals),
+        "__U_UL_GAIN_DB__": _format_rows(u_rows, gain_decimals),
+        "__SAT_DOWN_GAIN_DB__": _format_rows(sat_down, gain_decimals),
     }
     prompt = SYSTEM_PROMPT
     for token, value in replacements.items():
@@ -206,16 +235,20 @@ def _code_to_canonical(code: str) -> str:
 
 
 def _candidate_set(index: int) -> set[str]:
-    if index < 50:
+    region_size = K_URLLC // 3
+    if index < region_size:
         return {"G1", "G2", "W1", "W2", "W3", "W4"}
-    if index < 100:
+    if index < 2 * region_size:
         return {"S1", "S2"}
     return set(BS_CODES)
 
 
 def validate_decisions(urllc: list, embb: list) -> tuple[list[str], list[list[str]]]:
     if len(urllc) != K_URLLC or len(embb) != K_EMBB:
-        raise ValueError(f"Expected 150 URLLC and 150 eMBB entries, got {len(urllc)} and {len(embb)}")
+        raise ValueError(
+            f"Expected {K_URLLC} URLLC and {K_EMBB} eMBB entries, "
+            f"got {len(urllc)} and {len(embb)}"
+        )
 
     clean_u: list[str] = []
     clean_e: list[list[str]] = []
@@ -357,11 +390,13 @@ def build_ec_feedback(previous_iteration: int, max_bad_users: int = 80) -> str:
     )
 
 
-def build_outer_messages(iteration: int) -> list[dict]:
+def build_outer_messages(iteration: int, gain_decimals: int = 1) -> list[dict]:
     """Build the exact chat history used by one outer iteration."""
     if iteration < 0:
         raise ValueError("iteration must be nonnegative")
-    messages = [{"role": "system", "content": build_quantification_system_prompt()}]
+    messages = [
+        {"role": "system", "content": build_quantification_system_prompt(gain_decimals)}
+    ]
     if iteration == 0:
         messages.append({"role": "user", "content": INITIAL_USER_PROMPT})
     else:
@@ -427,9 +462,12 @@ def count_initial_prompt_tokens(
     model: str,
     host: str = "http://127.0.0.1:11434",
     num_ctx: int = 32768,
+    users_per_service: int = 150,
+    gain_decimals: int = 1,
 ) -> dict:
     """Ask Ollama to evaluate only the first-round prompt and report its exact token count."""
-    messages = build_outer_messages(0)
+    configure_scale(users_per_service)
+    messages = build_outer_messages(0, gain_decimals)
     result = _ollama_chat_result(
         host=host,
         model=model,
@@ -445,8 +483,10 @@ def count_initial_prompt_tokens(
         "load_duration_seconds": float(result.get("load_duration", 0)) / 1e9,
         "prompt_eval_duration_seconds": float(result.get("prompt_eval_duration", 0)) / 1e9,
         "num_ctx": int(num_ctx),
+        "users_per_service": int(users_per_service),
+        "gain_decimals": int(gain_decimals),
     }
-    log_dir = BASE_DIR / "Quantification" / "Ollama"
+    log_dir = BASE_DIR / "Quantification" / "Ollama" / str(SCALE)
     log_dir.mkdir(parents=True, exist_ok=True)
     output_path = log_dir / "token_count_iteration0.json"
     output_path.write_text(json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -462,10 +502,13 @@ def generate_outer_association(
     num_ctx: int = 32768,
     retries: int = 2,
     dry_run: bool = False,
+    users_per_service: int = 150,
+    gain_decimals: int = 1,
 ) -> Path:
-    messages = build_outer_messages(iteration)
+    configure_scale(users_per_service)
+    messages = build_outer_messages(iteration, gain_decimals)
 
-    log_dir = BASE_DIR / "Quantification" / "Ollama"
+    log_dir = BASE_DIR / "Quantification" / "Ollama" / str(SCALE)
     log_dir.mkdir(parents=True, exist_ok=True)
     request_path = log_dir / f"request_iteration{iteration}.json"
     request_path.write_text(
@@ -493,7 +536,7 @@ def generate_outer_association(
                         "role": "user",
                         "content": (
                             f"Your output is invalid: {exc}. Correct it. Return only the two assignments, "
-                            "with exactly 150 valid entries in each."
+                            f"with exactly {K_URLLC} valid URLLC entries and {K_EMBB} valid eMBB entries."
                         ),
                     },
                 ]
@@ -509,6 +552,8 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--num-ctx", type=int, default=32768)
     parser.add_argument("--retries", type=int, default=2)
+    parser.add_argument("--users-per-service", type=int, default=150)
+    parser.add_argument("--gain-decimals", type=int, default=1)
     parser.add_argument("--dry-run", action="store_true", help="Build and save the request without calling Ollama")
     args = parser.parse_args()
     output = generate_outer_association(
@@ -519,6 +564,8 @@ def main() -> None:
         num_ctx=args.num_ctx,
         retries=args.retries,
         dry_run=args.dry_run,
+        users_per_service=args.users_per_service,
+        gain_decimals=args.gain_decimals,
     )
     print(f"[OK] {output}")
 

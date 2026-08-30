@@ -31,18 +31,13 @@ from main_improved import (
 from ollama_outer_optimizer import (
     POOL_ROOT,
     SOLUTION_ROOT,
+    configure_scale,
     count_initial_prompt_tokens,
     generate_outer_association,
 )
 
 
 BASE_DIR = Path(__file__).resolve().parent
-K1_U = K2_U = K3_U = 50
-K1_E = K2_E = K3_E = 50
-K_URLLC = K1_U + K2_U + K3_U
-K_EMBB = K1_E + K2_E + K3_E
-SCALE = K_URLLC + K_EMBB
-NUM_LIST = [K1_U, K2_U, K3_U, K1_E, K2_E, K3_E]
 SIXG_NUM = 2
 WIFI_NUM = 4
 SAT_NUM = 2
@@ -59,13 +54,22 @@ def run_inner_ec(
     seed: int = 42,
     generations: int | None = None,
     population_size: int | None = None,
+    users_per_service: int = 150,
 ) -> dict:
     """Evaluate one Ollama-generated outer association with the proposed inner EC."""
+    configure_scale(users_per_service)
+    if users_per_service <= 0 or users_per_service % 3 != 0:
+        raise ValueError("users_per_service must be a positive multiple of 3")
+    k_urllc = k_embb = int(users_per_service)
+    region_size = users_per_service // 3
+    num_list = [region_size] * 6
+    scale = k_urllc + k_embb
+
     os.chdir(BASE_DIR)
     np.random.seed(seed)
     random.seed(seed)
 
-    solution_dir = SOLUTION_ROOT / str(SCALE) / f"Outer_{iteration}"
+    solution_dir = SOLUTION_ROOT / str(scale) / f"Outer_{iteration}"
     urllc_csv = solution_dir / "urllc_offloading_decision.csv"
     embb_csv = solution_dir / "embb_offloading_decision.csv"
     for path in (urllc_csv, embb_csv):
@@ -81,29 +85,36 @@ def run_inner_ec(
         wifi_num=WIFI_NUM,
         sat_num=SAT_NUM,
     )
-    expected_shape = (SCALE, RAT_NUM + SAT_NUM)
+    expected_shape = (scale, RAT_NUM + SAT_NUM)
     if outer.shape != expected_shape:
         raise ValueError(f"Outer shape {outer.shape} does not match {expected_shape}")
     np.savetxt(solution_dir / "outer_solution.csv", outer, delimiter=",", fmt="%d")
 
     task_paths = (
-        BASE_DIR / "Data" / f"urllc_tasks_{K_URLLC}.csv",
-        BASE_DIR / "Data" / f"embb_tasks_{K_EMBB}.csv",
+        BASE_DIR / "Data" / f"urllc_tasks_{k_urllc}.csv",
+        BASE_DIR / "Data" / f"embb_tasks_{k_embb}.csv",
     )
-    channel_path = BASE_DIR / "Channel" / f"channel_{K_URLLC}_{K_EMBB}.csv"
-    for path in (*task_paths, channel_path):
+    channel_u_path = BASE_DIR / "Channel" / f"channel_URLLC_{k_urllc}_{k_embb}.csv"
+    channel_e_path = BASE_DIR / "Channel" / f"channel_eMBB_{k_urllc}_{k_embb}.csv"
+    for path in (*task_paths, channel_u_path, channel_e_path):
         if not path.exists():
-            raise FileNotFoundError(f"Missing 150+150 quantification input: {path}")
-    channel = np.loadtxt(channel_path, delimiter=",", dtype=complex)
+            raise FileNotFoundError(f"Missing {k_urllc}+{k_embb} quantification input: {path}")
+    channel_u = np.loadtxt(channel_u_path, delimiter=",", dtype=complex)
+    channel_e = np.loadtxt(channel_e_path, delimiter=",", dtype=complex)
+    if channel_u.shape != (k_urllc, 10):
+        raise ValueError(f"Expected URLLC channel shape {(k_urllc, 10)}, got {channel_u.shape}")
+    if channel_e.shape != (k_embb, 10):
+        raise ValueError(f"Expected eMBB channel shape {(k_embb, 10)}, got {channel_e.shape}")
+    channel = np.vstack((channel_u, channel_e))
 
     inner = MyproblemInner(
-        K_URLLC,
-        K_EMBB,
+        k_urllc,
+        k_embb,
         RAT_NUM,
         seed,
         outer,
         channel,
-        NUM_LIST,
+        num_list,
         RAT_LIST,
     )
     if generations is not None:
@@ -117,7 +128,7 @@ def run_inner_ec(
 
     population_best, fitness_best, cv_best, cost_urllc_best, fitness_history = inner.run_origin()
 
-    pool_dir = POOL_ROOT / str(SCALE) / f"Outer{iteration}"
+    pool_dir = POOL_ROOT / str(scale) / f"Outer{iteration}"
     pool_dir.mkdir(parents=True, exist_ok=True)
     fitness_path = _write_fitness_result(
         str(pool_dir),
@@ -128,7 +139,7 @@ def run_inner_ec(
         fitness_history,
     )
 
-    result_dir = BASE_DIR / "Result_Ollama_Proposed"
+    result_dir = BASE_DIR / "Result_Ollama_Proposed" / str(scale)
     metrics_path = _append_outer_iteration_metrics(
         str(result_dir),
         iteration,
@@ -143,6 +154,8 @@ def run_inner_ec(
 
     summary = {
         "outer_iteration": int(iteration),
+        "users_per_service": int(users_per_service),
+        "total_users": int(scale),
         "seed": int(seed),
         "generations": int(inner.generation),
         "population_size": int(inner.population_size),
@@ -172,6 +185,8 @@ def run_rounds(args) -> None:
             temperature=args.temperature,
             num_ctx=args.num_ctx,
             retries=args.retries,
+            users_per_service=args.users_per_service,
+            gain_decimals=args.gain_decimals,
         )
         print(f"\n===== OUTER ITERATION {iteration}: INNER EC =====")
         run_inner_ec(
@@ -179,6 +194,7 @@ def run_rounds(args) -> None:
             seed=args.seed,
             generations=args.generations,
             population_size=args.population_size,
+            users_per_service=args.users_per_service,
         )
 
 
@@ -197,6 +213,8 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--num-ctx", type=int, default=32768)
     parser.add_argument("--retries", type=int, default=2)
+    parser.add_argument("--users-per-service", type=int, default=150)
+    parser.add_argument("--gain-decimals", type=int, default=1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--generations", type=int, default=None, help="Override the current proposed EC generation count")
     parser.add_argument("--population-size", type=int, default=None, help="Override the current proposed EC population size")
@@ -207,6 +225,8 @@ def main() -> None:
             model=args.model,
             host=args.host,
             num_ctx=args.num_ctx,
+            users_per_service=args.users_per_service,
+            gain_decimals=args.gain_decimals,
         )
         print(json.dumps(stats, ensure_ascii=False, indent=2))
     elif args.rounds is not None:
@@ -219,6 +239,7 @@ def main() -> None:
             seed=args.seed,
             generations=args.generations,
             population_size=args.population_size,
+            users_per_service=args.users_per_service,
         )
 
 
