@@ -85,6 +85,9 @@ Compact data format:
 - Rows __R3_START__--__K_URLLC__ have columns [G1,G2,W1,W2,W3,W4,S1,S2].
 - SAT_DOWN_GAIN_DB is [S1-to-cloud,S2-to-cloud] and is global.
 
+Compact association codebooks:
+__COMPACT_CODEBOOKS__
+
 <E_TASK>
 __E_TASK__
 </E_TASK>
@@ -107,13 +110,11 @@ __SAT_DOWN_GAIN_DB__
 
 The inner EC algorithm optimizes continuous communication resources. Do not output bandwidth, power, or other continuous variables.
 
-Return exactly one JSON object and no explanation:
-{"urllc_offloading_decision": [...], "embb_offloading_decision": [...]}
-
-The URLLC list must contain exactly __K_URLLC__ BS-code strings. The eMBB list must contain exactly __K_EMBB__ lists of BS-code strings and obey all candidate and per-RAT constraints.
+Return exactly one JSON object with keys u1,u2,u3,e1,e2,e3 and no explanation.
+Each value must be an integer array of exactly __REGION_SIZE__ entries. Each integer is the 1-based index of the corresponding region codebook above. Do not output BS strings. Do not omit, abbreviate, or truncate entries.
 """
 
-INITIAL_USER_PROMPT = """Construct an initial high-quality association from the supplied task and channel data. Account for channel quality and load balancing rather than assigning every user to the same strongest RAT. Before responding, verify that each list has exactly the required number of entries and that its three consecutive user-region blocks have equal length. Return only the requested JSON object."""
+INITIAL_USER_PROMPT = """Construct an initial high-quality association from the supplied task and channel data. Account for channel quality and load balancing rather than assigning every user to the same strongest RAT. Return only the compact JSON object with the six required integer arrays."""
 
 FEEDBACK_USER_PROMPT = """The inner EC evaluation of the current association has been completed.
 
@@ -129,9 +130,7 @@ Using the previously provided system state, task information, channel informatio
 
 Give particular attention to URLLC tasks that miss or nearly miss their deadlines. However, do not simply assign every critical task to its individually strongest link; account for BS/RAT congestion, shared bandwidth, satellite-resource competition, queueing effects, and the provided EC feedback.
 
-Return only one JSON object:
-
-{"urllc_offloading_decision": [...], "embb_offloading_decision": [...]}
+Return only the compact JSON object with keys u1,u2,u3,e1,e2,e3. Each value must contain exactly the required number of feasible-codebook indices. Do not output BS strings, explanations, markdown, omissions, or abbreviations.
 """
 
 
@@ -154,6 +153,49 @@ def _candidate_columns(user_index: int) -> slice:
     if user_index < 2 * region_size:
         return slice(6, 8)
     return slice(0, 8)
+
+
+def _association_combinations(
+    g_codes: tuple[str, ...] = (),
+    w_codes: tuple[str, ...] = (),
+    s_codes: tuple[str, ...] = (),
+) -> list[list[str]]:
+    """Enumerate all nonempty associations with at most one BS from each RAT."""
+    combinations: list[list[str]] = []
+    for g in (None, *g_codes):
+        for w in (None, *w_codes):
+            for s in (None, *s_codes):
+                selected = [code for code in (g, w, s) if code is not None]
+                if selected:
+                    combinations.append(selected)
+    return combinations
+
+
+def compact_codebooks() -> dict[str, list]:
+    """Return region-specific feasible choices addressed by 1-based indices."""
+    return {
+        "u1": ["G1", "G2", "W1", "W2", "W3", "W4"],
+        "u2": ["S1", "S2"],
+        "u3": list(BS_CODES),
+        "e1": _association_combinations(("G1", "G2"), ("W1", "W2", "W3", "W4")),
+        "e2": _association_combinations(s_codes=("S1", "S2")),
+        "e3": _association_combinations(
+            ("G1", "G2"),
+            ("W1", "W2", "W3", "W4"),
+            ("S1", "S2"),
+        ),
+    }
+
+
+def _format_compact_codebooks() -> str:
+    lines = []
+    for key, choices in compact_codebooks().items():
+        encoded = ";".join(
+            f"{index}={'+'.join(choice) if isinstance(choice, list) else choice}"
+            for index, choice in enumerate(choices, start=1)
+        )
+        lines.append(f"- {key}: {encoded}")
+    return "\n".join(lines)
 
 
 def build_quantification_system_prompt(gain_decimals: int = 1) -> str:
@@ -205,6 +247,7 @@ def build_quantification_system_prompt(gain_decimals: int = 1) -> str:
         "__R2_END__": str(2 * region_size),
         "__R3_START__": str(2 * region_size + 1),
         "__NEXT_USER__": str(K_URLLC + 1),
+        "__COMPACT_CODEBOOKS__": _format_compact_codebooks(),
         "__E_TASK__": e_task,
         "__U_TASK__": u_task,
         "__E_UL_GAIN_DB__": _format_rows(e_rows, gain_decimals),
@@ -284,6 +327,9 @@ def parse_model_response(text: str) -> tuple[list[str], list[list[str]]]:
     except json.JSONDecodeError:
         payload = None
     if isinstance(payload, dict):
+        compact_keys = ("u1", "u2", "u3", "e1", "e2", "e3")
+        if all(key in payload for key in compact_keys):
+            return decode_compact_decisions(payload)
         if "urllc_offloading_decision" not in payload or "embb_offloading_decision" not in payload:
             raise ValueError("JSON response is missing one or both decision fields")
         return validate_decisions(
@@ -302,31 +348,71 @@ def parse_model_response(text: str) -> tuple[list[str], list[list[str]]]:
     return validate_decisions(ast.literal_eval(u_match.group(1)), ast.literal_eval(e_match.group(1)))
 
 
+def decode_compact_decisions(payload: dict) -> tuple[list[str], list[list[str]]]:
+    region_size = K_URLLC // 3
+    books = compact_codebooks()
+    decoded: dict[str, list] = {}
+    for key in ("u1", "u2", "u3", "e1", "e2", "e3"):
+        values = payload.get(key)
+        if not isinstance(values, list) or len(values) != region_size:
+            actual = len(values) if isinstance(values, list) else type(values).__name__
+            raise ValueError(f"Compact field {key} must have {region_size} integers, got {actual}")
+        choices = books[key]
+        decoded_values = []
+        for position, value in enumerate(values, start=1):
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"Compact field {key}[{position}] must be an integer")
+            if not 1 <= value <= len(choices):
+                raise ValueError(
+                    f"Compact field {key}[{position}]={value} is outside 1..{len(choices)}"
+                )
+            decoded_values.append(choices[value - 1])
+        decoded[key] = decoded_values
+    urllc = decoded["u1"] + decoded["u2"] + decoded["u3"]
+    embb = decoded["e1"] + decoded["e2"] + decoded["e3"]
+    return validate_decisions(urllc, embb)
+
+
+def encode_compact_decisions(urllc: list[str], embb: list[list[str]]) -> dict[str, list[int]]:
+    urllc, embb = validate_decisions(urllc, embb)
+    region_size = K_URLLC // 3
+    books = compact_codebooks()
+    blocks = {
+        "u1": urllc[:region_size],
+        "u2": urllc[region_size:2 * region_size],
+        "u3": urllc[2 * region_size:],
+        "e1": embb[:region_size],
+        "e2": embb[region_size:2 * region_size],
+        "e3": embb[2 * region_size:],
+    }
+    encoded: dict[str, list[int]] = {}
+    order = {code: index for index, code in enumerate(BS_CODES)}
+    for key, values in blocks.items():
+        choices = books[key]
+        indices = []
+        for value in values:
+            normalized = sorted(value, key=order.get) if isinstance(value, list) else value
+            indices.append(choices.index(normalized) + 1)
+        encoded[key] = indices
+    return encoded
+
+
 def association_response_schema() -> dict:
-    """Force Ollama to decode exactly K entries for each service."""
-    bs_enum = list(BS_CODES)
+    """Force six fixed-length arrays of region-feasible codebook indices."""
+    region_size = K_URLLC // 3
+    books = compact_codebooks()
     return {
         "type": "object",
         "properties": {
-            "urllc_offloading_decision": {
+            key: {
                 "type": "array",
-                "minItems": K_URLLC,
-                "maxItems": K_URLLC,
-                "items": {"type": "string", "enum": bs_enum},
-            },
-            "embb_offloading_decision": {
-                "type": "array",
-                "minItems": K_EMBB,
-                "maxItems": K_EMBB,
-                "items": {
-                    "type": "array",
-                    "minItems": 1,
-                    "maxItems": 3,
-                    "items": {"type": "string", "enum": bs_enum},
-                },
-            },
+                "minItems": region_size,
+                "maxItems": region_size,
+                "items": {"type": "integer", "minimum": 1, "maximum": len(books[key])},
+            }
+            for key in ("u1", "u2", "u3", "e1", "e2", "e3")
         },
-        "required": ["urllc_offloading_decision", "embb_offloading_decision"],
+        "required": ["u1", "u2", "u3", "e1", "e2", "e3"],
         "additionalProperties": False,
     }
 
@@ -340,10 +426,7 @@ def format_decisions(urllc: list[str], embb: list[list[str]]) -> str:
 
 def format_decisions_json(urllc: list[str], embb: list[list[str]]) -> str:
     return json.dumps(
-        {
-            "urllc_offloading_decision": urllc,
-            "embb_offloading_decision": embb,
-        },
+        encode_compact_decisions(urllc, embb),
         ensure_ascii=False,
         separators=(",", ":"),
     )
@@ -656,13 +739,13 @@ def generate_outer_association(
             )
             last_error = ValueError(diagnostic)
             region_size = K_URLLC // 3
+            limits = {key: len(value) for key, value in compact_codebooks().items()}
             correction = (
-                f"Your previous output shown above was invalid: {diagnostic}. Edit and recount that answer. "
-                f"Each list must have exactly {K_URLLC} entries: entries 1--{region_size} are region 1, "
-                f"entries {region_size + 1}--{2 * region_size} are region 2, and entries "
-                f"{2 * region_size + 1}--{K_URLLC} are region 3. Delete every entry after "
-                f"{K_URLLC}; entry {K_URLLC + 1} must not exist. Preserve user order and candidate sets. "
-                "Return only the corrected JSON object without commentary."
+                f"Your previous compact JSON was invalid: {diagnostic}. Correct it. Each of u1,u2,u3,e1,e2,e3 "
+                f"must contain exactly {region_size} integers. Valid integer ranges are: "
+                f"u1=1..{limits['u1']}, u2=1..{limits['u2']}, u3=1..{limits['u3']}, "
+                f"e1=1..{limits['e1']}, e2=1..{limits['e2']}, e3=1..{limits['e3']}. "
+                "Return only the corrected compact JSON object without commentary."
             )
             # A non-truncated response is small enough to feed back for targeted correction.
             previous_invalid_response = (
