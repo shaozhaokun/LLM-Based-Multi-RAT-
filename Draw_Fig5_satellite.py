@@ -18,9 +18,15 @@ multi_agent_ec = np.array([23.80, 21.10, 19.70, 18.85, 18.35], dtype=float)
 single_agent_mga = np.array([31.90, 27.40, 25.449181, 24.15, 23.25], dtype=float)
 single_agent_mde = np.array([34.10, 29.20, 26.94548, 25.55, 24.58], dtype=float)
 
-size_yxlim = 14
-size_label = 9
-size_tick = 8
+# size_yxlim = 14
+# size_label = 9
+# size_tick = 8
+
+
+size_yxlim = 20
+size_label = 14
+size_tick = 14
+LINEWIDTH = 2
 
 os.makedirs("Fig_journal", exist_ok=True)
 
@@ -37,7 +43,7 @@ with plt.style.context("ieee"):
         markerfacecolor="none",
         markeredgecolor="#0072B2",
         markeredgewidth=1.0,
-        linewidth=1.2,
+        linewidth=LINEWIDTH,
         markersize=6,
     )
     plt.plot(
@@ -50,7 +56,7 @@ with plt.style.context("ieee"):
         markerfacecolor="none",
         markeredgecolor="#009E73",
         markeredgewidth=1.0,
-        linewidth=1.2,
+        linewidth=LINEWIDTH,
         markersize=5,
     )
     plt.plot(
@@ -63,7 +69,7 @@ with plt.style.context("ieee"):
         markerfacecolor="none",
         markeredgecolor="#E69F00",
         markeredgewidth=1.0,
-        linewidth=1.2,
+        linewidth=LINEWIDTH,
         markersize=5,
     )
     plt.plot(
@@ -76,7 +82,7 @@ with plt.style.context("ieee"):
         markerfacecolor="none",
         markeredgecolor="#D55E00",
         markeredgewidth=1.0,
-        linewidth=1.2,
+        linewidth=LINEWIDTH,
         markersize=5,
     )
 

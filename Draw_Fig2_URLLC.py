@@ -13,9 +13,13 @@ except Exception:
 # # ### Fig 1
 
 markers = ['.', '<', 'o', '*', '1', '^', 'P', 'p']
-size_yxlim = 12
-size_label = 10
-size_tick = 8
+# size_yxlim = 12
+# size_label = 10
+# size_tick = 8
+
+size_yxlim = 20
+size_label = 15
+size_tick = 14
 
 
 
@@ -54,7 +58,7 @@ with plt.style.context("ieee"):
 
 
     
-    plt.ylabel("Outage ratio of delay-sensitive user",fontsize=size_yxlim)
+    plt.ylabel("Outage ratio of task (u,k)",fontsize=size_yxlim)
     plt.xlabel("Number of users",fontsize=size_yxlim)
     plt.xlim(120, 360)
     plt.xticks(np.arange(120, 360 + 60, 60))

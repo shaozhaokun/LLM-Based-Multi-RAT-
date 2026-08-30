@@ -18,9 +18,18 @@ multi_agent = np.array([19.70, 20.80, 22.10], dtype=float)
 single_ga = np.array([25.449181, 27.00, 28.70], dtype=float)
 single_de = np.array([26.94548, 28.50, 30.30], dtype=float)
 
-size_yxlim = 12
-size_label = 9
-size_tick = 8
+# size_yxlim = 12
+# size_label = 9
+# size_tick = 8
+
+# size_yxlim = 14
+# size_label = 9
+# size_tick = 8
+
+size_yxlim = 16
+size_label = 11
+size_tick = 10
+
 
 x = np.arange(len(labels))
 width = 0.18
@@ -28,7 +37,8 @@ width = 0.18
 os.makedirs("Fig_journal", exist_ok=True)
 
 with plt.style.context("ieee"):
-    fig, ax = plt.subplots(figsize=(3.5, 3.0))
+    # fig, ax = plt.subplots(figsize=(3.5, 3.0))
+    fig, ax = plt.subplots(figsize=(5.3, 3.8))
 
     ax.bar(x - width * 1.5, proposed/120, width, label="Proposed", color="#0072B2")
     ax.bar(x - width / 2, multi_agent/120, width, label="Multi-Agent EC", color="#009E73")

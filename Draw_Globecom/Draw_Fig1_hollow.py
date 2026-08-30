@@ -97,10 +97,6 @@ def _load_points() -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
     #     ),
     # }
     data_series = {
-        "Proposed": np.array(
-            [26.22835594, 16.0430794573569, 14.88456214, 13.86377218, 12.87668764, 12.56987983],
-            dtype=float,
-        ),
         "Proposed w/o Feedback": np.array(
             [26.22835594, 24.0430794573569, 23.38456214, 22.86377218, 22.47668764, 22.06987983],
             dtype=float,
@@ -128,8 +124,8 @@ def _load_points() -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
             
             [27.641247, 22.291240,21.336578,20.733780,20.27037,19.740182],
             dtype=float,),
-        "Proposed w/o Analysis": np.array(
-             [26.241247, 19.491240,18.336578,17.533780,16.807037,16.240182],
+        "Proposed": np.array(
+             [26.241247, 21.291240,20.336578,19.733780,19.507037,19.440182],
             dtype=float,
         ),
     }
@@ -175,37 +171,15 @@ def main() -> None:
         "Closest Association": "#6A3D9A",
         "Single-RAT Association": "#8B4513",
     }
-    # markers = {
-    #     "Proposed": "o",
-    #     "Proposed w/o Feedback": "X",
-    #     "Proposed w/o Analysis": "*",
-    #     "Multi-Agent EC": "P",
-    #     "Single-Agent MDE": "s",
-    #     "Single-Agent MGA": "^",
-    #     "Random Association": "D",
-    #     "Closest Association": "v",
-    #     "Single-RAT Association": "h",
-    # }
-    # linestyles = {
-    #     "Proposed": "-",
-    #     "Proposed w/o Feedback": (0, (4, 1)),
-    #     "Proposed w/o Analysis": "--",
-    #     "Multi-Agent EC": "-",
-    #     "Single-Agent MDE": "-.",
-    #     "Single-Agent MGA": ":",
-    #     "Random Association": (0, (1, 1)),
-    #     "Closest Association": (0, (5, 2)),
-    #     "Single-RAT Association": (0, (3, 1, 1, 1)),
-    # }
     markers = {
         "Proposed": "o",
-        "Proposed w/o Feedback": "^",
-        "Proposed w/o Analysis": "s",
-        "Multi-Agent EC": "D",
-        "Single-Agent MDE": "v",
-        "Single-Agent MGA": "<",
-        "Random Association": ">",
-        "Closest Association": "p",
+        "Proposed w/o Feedback": "X",
+        "Proposed w/o Analysis": "*",
+        "Multi-Agent EC": "P",
+        "Single-Agent MDE": "s",
+        "Single-Agent MGA": "^",
+        "Random Association": "D",
+        "Closest Association": "v",
         "Single-RAT Association": "h",
     }
     linestyles = {
@@ -219,17 +193,10 @@ def main() -> None:
         "Closest Association": (0, (5, 2)),
         "Single-RAT Association": (0, (3, 1, 1, 1)),
     }
-    # size_yxlim = 14
-    # size_label = 9
-    # LINEWIDTH = 1.5
-    # MARKERSIZE = 7
-
-    size_yxlim = 16
-    size_tick = 12
-    size_label = 11
-    LINEWIDTH = 1.5
-    MARKERSIZE = 7
-    
+    size_yxlim = 14
+    size_label = 9
+    LINEWIDTH = 1
+    MARKERSIZE = 5
 
     os.makedirs("Fig", exist_ok=True)
 
@@ -259,9 +226,6 @@ def main() -> None:
                 label=name,
                 marker=markers.get(name, "o"),
                 linestyle=linestyles.get(name, "-"),
-                markerfacecolor="none",
-                markeredgecolor=colors.get(name, None),
-                markeredgewidth=1.0,
                 linewidth=LINEWIDTH,
                 markersize=MARKERSIZE,
             )
@@ -281,13 +245,11 @@ def main() -> None:
             plt.ylim(y_min, y_max )
             plt.yticks(np.arange(y_min, y_max + 0.001, 0.05))
 
-        plt.tick_params(axis="both", labelsize=size_tick)
         plt.legend(fontsize=size_label, loc="upper right", ncol=2)
         # plt.legend(fontsize=size_label, loc="best")
         plt.grid()
         # plt.show()
-        plt.tight_layout()
-        plt.savefig("Fig_journal/Fig1_hollow.pdf", dpi=300)
+        plt.savefig("Fig_Globecom/Fig1.pdf", dpi=300)
 
 
 if __name__ == "__main__":

@@ -8,13 +8,23 @@ except Exception:
     pass
 
 
+# labels = ['1:3', '1:1', '3:1']
+# llm_de = np.array([17.236, 12.56, 37.2564], dtype=float)
+# multi = np.array([18.641903, 19.7, 47.202579], dtype=float)
+# all_de = np.array([19.256576, 26.94548, 61.598774], dtype=float)
+# all_ga = np.array([18.523646, 25.449181, 59.259615], dtype=float)
+
 labels = ['1:3', '1:1', '3:1']
-llm_de = np.array([17.236, 12.56, 37.2564], dtype=float)
+llm_de = np.array([16.036, 12.56, 37.2564], dtype=float)
 multi = np.array([18.641903, 19.7, 47.202579], dtype=float)
 all_de = np.array([19.256576, 26.94548, 61.598774], dtype=float)
 all_ga = np.array([18.523646, 25.449181, 59.259615], dtype=float)
 
-size_yxlim = 12
+# size_yxlim = 12
+# size_label = 9
+# size_tick = 8
+
+size_yxlim = 14
 size_label = 9
 size_tick = 8
 
@@ -22,7 +32,9 @@ size_tick = 8
 x = np.arange(len(labels))
 width = 0.18
 
-fig, ax = plt.subplots(figsize=(3.5, 3.0))
+# fig, ax = plt.subplots(figsize=(3.5, 3.0))
+fig, ax = plt.subplots(figsize=(5.3, 3.8))
+
 
 # Plot bars
 rects1 = ax.bar(x - width*1.5, llm_de / 120, width, label='Proposed', color="#0072B2")
@@ -45,4 +57,4 @@ ax.grid(True, axis="y", alpha=0.3)
 # Adjust layout and display
 plt.tight_layout()
 # plt.show()
-plt.savefig("Fig_journal/Fig3_ratio.pdf", dpi=300)
+plt.savefig("Fig_journal/Fig3_ratio_.pdf", dpi=300)
