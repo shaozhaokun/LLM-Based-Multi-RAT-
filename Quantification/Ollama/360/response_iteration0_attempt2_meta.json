@@ -1,0 +1,9 @@
+{
+  "model": "qwen3.5:35b",
+  "done_reason": "stop",
+  "prompt_eval_count": 16812,
+  "eval_count": 1007,
+  "thinking_chars": 0,
+  "content_chars": 1967,
+  "num_predict": 8192
+}

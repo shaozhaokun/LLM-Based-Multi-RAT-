@@ -1,5 +1,5 @@
 {
-  "model": "test-model",
+  "model": "qwen3.5:35b",
   "host": "http://127.0.0.1:11434",
   "messages": [
     {
