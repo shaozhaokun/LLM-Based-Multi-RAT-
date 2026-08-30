@@ -187,6 +187,7 @@ def run_rounds(args) -> None:
             retries=args.retries,
             users_per_service=args.users_per_service,
             gain_decimals=args.gain_decimals,
+            num_predict=args.num_predict,
         )
         print(f"\n===== OUTER ITERATION {iteration}: INNER EC =====")
         run_inner_ec(
@@ -212,6 +213,7 @@ def main() -> None:
     parser.add_argument("--host", default=os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"))
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--num-ctx", type=int, default=32768)
+    parser.add_argument("--num-predict", type=int, default=8192)
     parser.add_argument("--retries", type=int, default=2)
     parser.add_argument("--users-per-service", type=int, default=150)
     parser.add_argument("--gain-decimals", type=int, default=1)

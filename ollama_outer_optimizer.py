@@ -426,6 +426,7 @@ def _ollama_chat_result(
     temperature: float,
     num_ctx: int,
     num_predict: int | None = None,
+    think: bool = False,
 ) -> dict:
     options = {"temperature": temperature, "num_ctx": num_ctx}
     if num_predict is not None:
@@ -435,6 +436,7 @@ def _ollama_chat_result(
             "model": model,
             "messages": messages,
             "stream": False,
+            "think": think,
             "options": options,
         }
     ).encode("utf-8")
@@ -454,8 +456,23 @@ def _ollama_chat_result(
     return result
 
 
-def _ollama_chat(host: str, model: str, messages: list[dict], temperature: float, num_ctx: int) -> str:
-    return _ollama_chat_result(host, model, messages, temperature, num_ctx)["message"]["content"]
+def _ollama_chat(
+    host: str,
+    model: str,
+    messages: list[dict],
+    temperature: float,
+    num_ctx: int,
+    num_predict: int = 8192,
+) -> str:
+    return _ollama_chat_result(
+        host,
+        model,
+        messages,
+        temperature,
+        num_ctx,
+        num_predict=num_predict,
+        think=False,
+    )["message"]["content"]
 
 
 def count_initial_prompt_tokens(
@@ -475,6 +492,7 @@ def count_initial_prompt_tokens(
         temperature=0.0,
         num_ctx=num_ctx,
         num_predict=1,
+        think=False,
     )
     stats = {
         "model": result.get("model", model),
@@ -504,6 +522,7 @@ def generate_outer_association(
     dry_run: bool = False,
     users_per_service: int = 150,
     gain_decimals: int = 1,
+    num_predict: int = 8192,
 ) -> Path:
     configure_scale(users_per_service)
     messages = build_outer_messages(iteration, gain_decimals)
@@ -518,28 +537,52 @@ def generate_outer_association(
     if dry_run:
         return request_path
 
+    if num_predict <= 0:
+        raise ValueError("num_predict must be positive")
     last_error: Exception | None = None
+    correction: str | None = None
     for attempt in range(retries + 1):
-        response_text = _ollama_chat(host, model, messages, temperature, num_ctx)
+        attempt_messages = list(messages)
+        if correction is not None:
+            attempt_messages.append({"role": "user", "content": correction})
+        result = _ollama_chat_result(
+            host=host,
+            model=model,
+            messages=attempt_messages,
+            temperature=temperature,
+            num_ctx=num_ctx,
+            num_predict=num_predict,
+            think=False,
+        )
+        response_text = result["message"]["content"]
         (log_dir / f"response_iteration{iteration}_attempt{attempt}.txt").write_text(
             response_text, encoding="utf-8"
+        )
+        response_meta = {
+            "model": result.get("model", model),
+            "done_reason": result.get("done_reason"),
+            "prompt_eval_count": result.get("prompt_eval_count"),
+            "eval_count": result.get("eval_count"),
+            "thinking_chars": len(result.get("message", {}).get("thinking", "")),
+            "content_chars": len(response_text),
+            "num_predict": num_predict,
+        }
+        (log_dir / f"response_iteration{iteration}_attempt{attempt}_meta.json").write_text(
+            json.dumps(response_meta, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         try:
             urllc, embb = parse_model_response(response_text)
             return save_decisions(iteration, urllc, embb)
         except (ValueError, SyntaxError) as exc:
-            last_error = exc
-            messages.extend(
-                [
-                    {"role": "assistant", "content": response_text},
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Your output is invalid: {exc}. Correct it. Return only the two assignments, "
-                            f"with exactly {K_URLLC} valid URLLC entries and {K_EMBB} valid eMBB entries."
-                        ),
-                    },
-                ]
+            diagnostic = (
+                f"{exc}; done_reason={result.get('done_reason')!r}, "
+                f"eval_count={result.get('eval_count')!r}, num_predict={num_predict}"
+            )
+            last_error = ValueError(diagnostic)
+            correction = (
+                f"Your previous output was invalid: {diagnostic}. Generate the complete answer again from "
+                f"the original data. Return only the two assignments, with exactly {K_URLLC} valid URLLC "
+                f"entries and {K_EMBB} valid eMBB entries. Do not abbreviate, omit, or truncate any entry."
             )
     raise RuntimeError(f"Ollama failed to produce a valid association: {last_error}")
 
@@ -551,6 +594,7 @@ def main() -> None:
     parser.add_argument("--host", default=os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"))
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--num-ctx", type=int, default=32768)
+    parser.add_argument("--num-predict", type=int, default=8192)
     parser.add_argument("--retries", type=int, default=2)
     parser.add_argument("--users-per-service", type=int, default=150)
     parser.add_argument("--gain-decimals", type=int, default=1)
@@ -566,6 +610,7 @@ def main() -> None:
         dry_run=args.dry_run,
         users_per_service=args.users_per_service,
         gain_decimals=args.gain_decimals,
+        num_predict=args.num_predict,
     )
     print(f"[OK] {output}")
 
