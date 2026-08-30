@@ -58,6 +58,12 @@ For each service type, the candidate BS set is:
 
 Each URLLC task must select exactly one candidate BS. Each eMBB task may select multiple candidate BSs, but at most one 6G BS, at most one WiFi BS, at most one satellite BS, and at least one BS in total.
 
+For each output list, preserve this exact block structure:
+- entries 1--__R1_END__: exactly __REGION_SIZE__ region-1 users;
+- entries __R2_START__--__R2_END__: exactly __REGION_SIZE__ region-2 users;
+- entries __R3_START__--__K_URLLC__: exactly __REGION_SIZE__ region-3 users.
+The list ends at entry __K_URLLC__. Never append an entry __NEXT_USER__ or any later entry.
+
 Network configuration:
 - 6G: 2 BSs, 50e6 Hz per BS, terrestrial BS-to-cloud rate 4e7 bit/s.
 - WiFi: 4 BSs, 10e6 Hz per BS, terrestrial BS-to-cloud rate 2e7 bit/s.
@@ -108,7 +114,7 @@ embb_offloading_decision = [...]
 The URLLC list must contain exactly __K_URLLC__ BS-code strings. The eMBB list must contain exactly __K_EMBB__ lists of BS-code strings and obey all candidate and per-RAT constraints.
 """
 
-INITIAL_USER_PROMPT = """Construct an initial high-quality association from the supplied task and channel data. Account for channel quality and load balancing rather than assigning every user to the same strongest RAT. Return only the two requested variables."""
+INITIAL_USER_PROMPT = """Construct an initial high-quality association from the supplied task and channel data. Account for channel quality and load balancing rather than assigning every user to the same strongest RAT. Before responding, verify that each list has exactly the required number of entries and that its three consecutive user-region blocks have equal length. Return only the two requested variables."""
 
 FEEDBACK_USER_PROMPT = """The inner EC evaluation of the current association has been completed.
 
@@ -196,9 +202,11 @@ def build_quantification_system_prompt(gain_decimals: int = 1) -> str:
         "__K_URLLC__": str(K_URLLC),
         "__K_EMBB__": str(K_EMBB),
         "__R1_END__": str(region_size),
+        "__REGION_SIZE__": str(region_size),
         "__R2_START__": str(region_size + 1),
         "__R2_END__": str(2 * region_size),
         "__R3_START__": str(2 * region_size + 1),
+        "__NEXT_USER__": str(K_URLLC + 1),
         "__E_TASK__": e_task,
         "__U_TASK__": u_task,
         "__E_UL_GAIN_DB__": _format_rows(e_rows, gain_decimals),
@@ -541,9 +549,14 @@ def generate_outer_association(
         raise ValueError("num_predict must be positive")
     last_error: Exception | None = None
     correction: str | None = None
+    previous_invalid_response: str | None = None
     for attempt in range(retries + 1):
         attempt_messages = list(messages)
         if correction is not None:
+            if previous_invalid_response is not None:
+                attempt_messages.append(
+                    {"role": "assistant", "content": previous_invalid_response}
+                )
             attempt_messages.append({"role": "user", "content": correction})
         result = _ollama_chat_result(
             host=host,
@@ -579,10 +592,20 @@ def generate_outer_association(
                 f"eval_count={result.get('eval_count')!r}, num_predict={num_predict}"
             )
             last_error = ValueError(diagnostic)
+            region_size = K_URLLC // 3
             correction = (
-                f"Your previous output was invalid: {diagnostic}. Generate the complete answer again from "
-                f"the original data. Return only the two assignments, with exactly {K_URLLC} valid URLLC "
-                f"entries and {K_EMBB} valid eMBB entries. Do not abbreviate, omit, or truncate any entry."
+                f"Your previous output shown above was invalid: {diagnostic}. Edit and recount that answer. "
+                f"Each list must have exactly {K_URLLC} entries: entries 1--{region_size} are region 1, "
+                f"entries {region_size + 1}--{2 * region_size} are region 2, and entries "
+                f"{2 * region_size + 1}--{K_URLLC} are region 3. Delete every entry after "
+                f"{K_URLLC}; entry {K_URLLC + 1} must not exist. Preserve user order and candidate sets. "
+                "Return only the corrected two assignments without commentary."
+            )
+            # A non-truncated response is small enough to feed back for targeted correction.
+            previous_invalid_response = (
+                response_text
+                if result.get("done_reason") != "length" and len(response_text) <= 100_000
+                else None
             )
     raise RuntimeError(f"Ollama failed to produce a valid association: {last_error}")
 
