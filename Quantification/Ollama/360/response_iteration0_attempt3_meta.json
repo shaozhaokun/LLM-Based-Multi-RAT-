@@ -1,9 +1,10 @@
 {
   "model": "qwen3.5:35b",
   "done_reason": "stop",
-  "prompt_eval_count": 16710,
-  "eval_count": 953,
+  "prompt_eval_count": 17779,
+  "eval_count": 2117,
   "thinking_chars": 0,
-  "content_chars": 1829,
-  "num_predict": 8192
+  "content_chars": 3527,
+  "num_predict": 8192,
+  "structured_output": true
 }
