@@ -107,14 +107,13 @@ __SAT_DOWN_GAIN_DB__
 
 The inner EC algorithm optimizes continuous communication resources. Do not output bandwidth, power, or other continuous variables.
 
-Return exactly two variables and no explanation:
-urllc_offloading_decision = [...]
-embb_offloading_decision = [...]
+Return exactly one JSON object and no explanation:
+{"urllc_offloading_decision": [...], "embb_offloading_decision": [...]}
 
 The URLLC list must contain exactly __K_URLLC__ BS-code strings. The eMBB list must contain exactly __K_EMBB__ lists of BS-code strings and obey all candidate and per-RAT constraints.
 """
 
-INITIAL_USER_PROMPT = """Construct an initial high-quality association from the supplied task and channel data. Account for channel quality and load balancing rather than assigning every user to the same strongest RAT. Before responding, verify that each list has exactly the required number of entries and that its three consecutive user-region blocks have equal length. Return only the two requested variables."""
+INITIAL_USER_PROMPT = """Construct an initial high-quality association from the supplied task and channel data. Account for channel quality and load balancing rather than assigning every user to the same strongest RAT. Before responding, verify that each list has exactly the required number of entries and that its three consecutive user-region blocks have equal length. Return only the requested JSON object."""
 
 FEEDBACK_USER_PROMPT = """The inner EC evaluation of the current association has been completed.
 
@@ -130,10 +129,9 @@ Using the previously provided system state, task information, channel informatio
 
 Give particular attention to URLLC tasks that miss or nearly miss their deadlines. However, do not simply assign every critical task to its individually strongest link; account for BS/RAT congestion, shared bandwidth, satellite-resource competition, queueing effects, and the provided EC feedback.
 
-Return only:
+Return only one JSON object:
 
-urllc_offloading_decision = [...]
-embb_offloading_decision = [...]
+{"urllc_offloading_decision": [...], "embb_offloading_decision": [...]}
 """
 
 
@@ -280,7 +278,19 @@ def validate_decisions(urllc: list, embb: list) -> tuple[list[str], list[list[st
 
 
 def parse_model_response(text: str) -> tuple[list[str], list[list[str]]]:
-    cleaned = re.sub(r"```(?:python)?|```", "", text, flags=re.IGNORECASE)
+    cleaned = re.sub(r"```(?:python|json)?|```", "", text, flags=re.IGNORECASE).strip()
+    try:
+        payload = json.loads(cleaned)
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict):
+        if "urllc_offloading_decision" not in payload or "embb_offloading_decision" not in payload:
+            raise ValueError("JSON response is missing one or both decision fields")
+        return validate_decisions(
+            payload["urllc_offloading_decision"],
+            payload["embb_offloading_decision"],
+        )
+
     u_match = re.search(
         r"urllc_offloading_decision\s*=\s*(\[.*?\])\s*(?=embb_offloading_decision\s*=)",
         cleaned,
@@ -292,10 +302,50 @@ def parse_model_response(text: str) -> tuple[list[str], list[list[str]]]:
     return validate_decisions(ast.literal_eval(u_match.group(1)), ast.literal_eval(e_match.group(1)))
 
 
+def association_response_schema() -> dict:
+    """Force Ollama to decode exactly K entries for each service."""
+    bs_enum = list(BS_CODES)
+    return {
+        "type": "object",
+        "properties": {
+            "urllc_offloading_decision": {
+                "type": "array",
+                "minItems": K_URLLC,
+                "maxItems": K_URLLC,
+                "items": {"type": "string", "enum": bs_enum},
+            },
+            "embb_offloading_decision": {
+                "type": "array",
+                "minItems": K_EMBB,
+                "maxItems": K_EMBB,
+                "items": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 3,
+                    "items": {"type": "string", "enum": bs_enum},
+                },
+            },
+        },
+        "required": ["urllc_offloading_decision", "embb_offloading_decision"],
+        "additionalProperties": False,
+    }
+
+
 def format_decisions(urllc: list[str], embb: list[list[str]]) -> str:
     return (
         f"urllc_offloading_decision = {urllc!r}\n"
         f"embb_offloading_decision = {embb!r}"
+    )
+
+
+def format_decisions_json(urllc: list[str], embb: list[list[str]]) -> str:
+    return json.dumps(
+        {
+            "urllc_offloading_decision": urllc,
+            "embb_offloading_decision": embb,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
     )
 
 
@@ -409,7 +459,7 @@ def build_outer_messages(iteration: int, gain_decimals: int = 1) -> list[dict]:
         messages.append({"role": "user", "content": INITIAL_USER_PROMPT})
     else:
         previous_u, previous_e = load_decisions(iteration - 1)
-        current = format_decisions(previous_u, previous_e)
+        current = format_decisions_json(previous_u, previous_e)
         feedback = build_ec_feedback(iteration - 1)
         messages.extend(
             [
@@ -435,19 +485,21 @@ def _ollama_chat_result(
     num_ctx: int,
     num_predict: int | None = None,
     think: bool = False,
+    response_format: dict | None = None,
 ) -> dict:
     options = {"temperature": temperature, "num_ctx": num_ctx}
     if num_predict is not None:
         options["num_predict"] = num_predict
-    payload = json.dumps(
-        {
-            "model": model,
-            "messages": messages,
-            "stream": False,
-            "think": think,
-            "options": options,
-        }
-    ).encode("utf-8")
+    request_body = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "think": think,
+        "options": options,
+    }
+    if response_format is not None:
+        request_body["format"] = response_format
+    payload = json.dumps(request_body).encode("utf-8")
     request = urllib.request.Request(
         host.rstrip("/") + "/api/chat",
         data=payload,
@@ -539,7 +591,16 @@ def generate_outer_association(
     log_dir.mkdir(parents=True, exist_ok=True)
     request_path = log_dir / f"request_iteration{iteration}.json"
     request_path.write_text(
-        json.dumps({"model": model, "host": host, "messages": messages}, ensure_ascii=False, indent=2),
+        json.dumps(
+            {
+                "model": model,
+                "host": host,
+                "messages": messages,
+                "format": association_response_schema(),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
     if dry_run:
@@ -566,6 +627,7 @@ def generate_outer_association(
             num_ctx=num_ctx,
             num_predict=num_predict,
             think=False,
+            response_format=association_response_schema(),
         )
         response_text = result["message"]["content"]
         (log_dir / f"response_iteration{iteration}_attempt{attempt}.txt").write_text(
@@ -579,6 +641,7 @@ def generate_outer_association(
             "thinking_chars": len(result.get("message", {}).get("thinking", "")),
             "content_chars": len(response_text),
             "num_predict": num_predict,
+            "structured_output": True,
         }
         (log_dir / f"response_iteration{iteration}_attempt{attempt}_meta.json").write_text(
             json.dumps(response_meta, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -599,7 +662,7 @@ def generate_outer_association(
                 f"entries {region_size + 1}--{2 * region_size} are region 2, and entries "
                 f"{2 * region_size + 1}--{K_URLLC} are region 3. Delete every entry after "
                 f"{K_URLLC}; entry {K_URLLC + 1} must not exist. Preserve user order and candidate sets. "
-                "Return only the corrected two assignments without commentary."
+                "Return only the corrected JSON object without commentary."
             )
             # A non-truncated response is small enough to feed back for targeted correction.
             previous_invalid_response = (
