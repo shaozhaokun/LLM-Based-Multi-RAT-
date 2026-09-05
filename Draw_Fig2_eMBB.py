@@ -57,6 +57,7 @@ with plt.style.context("ieee"):
 
     
     plt.ylabel("Average delay of task $(e,k)$",fontsize=size_yxlim)
+    # plt.ylabel("Average delay of delay-tolerant tasks",fontsize=size_yxlim)
     plt.xlabel("Number of users",fontsize=size_yxlim)
     plt.xlim(120, 360)
     plt.xticks(np.arange(120, 360 + 60, 60))

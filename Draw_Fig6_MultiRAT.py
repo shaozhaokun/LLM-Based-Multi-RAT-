@@ -129,7 +129,7 @@ with plt.style.context(plot_styles) if plot_styles else nullcontext():
         line5 = []
         line6 = []
 
-    ax1.set_xlabel("$N^e$", fontsize=size_yxlim)
+    ax1.set_xlabel("$Z^e$", fontsize=size_yxlim)
     # ax1.set_ylabel("Outage ratio of delay-sensitive user", fontsize=size_yxlim, color=urllc_color)
     # ax2.set_ylabel("Average delay of delay-tolerant user", fontsize=size_yxlim, color=embb_color)
     ax1.set_ylabel("Outage ratio ($\phi=u$)", fontsize=size_yxlim, color=urllc_color)

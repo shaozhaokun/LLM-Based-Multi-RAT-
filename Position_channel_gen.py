@@ -47,10 +47,10 @@ class RATDistanceCalculator:
         # 频率从 2 GHz 增加到 14 GHz（Ku 波段），FSPL 增加 (14/2)² = 49 倍
         # 虽然频率降低了，但 Ku 波段仍然需要很大的增益来补偿路径损耗
         # 注意：保持较大的增益值，因为即使 Ku 波段路径损耗比 Ka 波段小，仍然很大
-        # - G_m（卫星天线增益）：Ku 波段大型天线可达 40-50 dBi
-        # - g（用户终端天线增益）：Ku 波段固定终端可达 30-40 dBi
-        self.G_sat = np.full(self.M3, 1000000.0, dtype=float)  # G_m（线性，60 dBi，保持较大值）
-        self.g_sat = np.full(self.M3, 100000.0, dtype=float)   # g_{k,m}^{up,phi}（线性，50 dBi，保持较大值）
+        # - G_m（卫星天线增益）：40 dBi = 10^4（线性功率增益）
+        # - g（用户终端天线增益）：30 dBi = 10^3（线性功率增益）
+        self.G_sat = np.full(self.M3, 10000.0, dtype=float)  # G_m（线性，40 dBi）
+        self.g_sat = np.full(self.M3, 1000.0, dtype=float)   # g_{k,m}^{up,phi}（线性，30 dBi）
         # 注意：新模型（基于 Friis 传输方程）不再使用雨衰参数
         # 以下参数保留是为了兼容性，但新模型中不会被使用
         # 如果需要考虑雨衰，可以在新模型的基础上额外添加雨衰项
@@ -184,7 +184,7 @@ class RATDistanceCalculator:
 
         # ----------------------------
         # 卫星链路（m ∈ M3）：按新模型（基于 Friis 传输方程）计算
-        # h_i^{u2s} = A_i^{trans} * A_s^{rec} * Γ(θ_{is}) * (C / (4π L_i^{u2s} F))^2
+        # h_i^{u2s} = sqrt[A_i^{trans} A_s^{rec} Γ(θ_{is})] * C/(4π L_i^{u2s} F)
         # 其中：
         # - A_i^{trans}: 用户发射天线增益（g_sat）
         # - A_s^{rec}: 卫星接收天线增益（G_sat）
@@ -236,8 +236,9 @@ class RATDistanceCalculator:
                 ratio = np.where(np.abs(arg) > eps, j1_val / arg, 0.5)
                 Gamma[mask_not_90] = 4.0 * np.abs(ratio) ** 2
             
-            # 计算信道增益（基于 Friis 传输方程）
-            # h = A_trans * A_rec * Γ(θ) * (C / (4π L F))^2
+            # 计算 Friis 功率增益，再转换为复信道幅度
+            # beta = A_trans * A_rec * Γ(θ) * (C / (4π L F))^2
+            # h = small_scale_fading * sqrt(beta)
             # 注意：论文中 F 的单位是 GHz，但 Friis 公式中频率单位应该是 Hz
             # 所以需要转换：F_Hz = F_GHz * 1e9
             C = self.c_light  # 光速 [m/s] = 3e8
@@ -248,8 +249,10 @@ class RATDistanceCalculator:
             # C [m/s], L [m], F [Hz]
             fspl_factor = (C / (4.0 * np.pi * L * F_Hz + eps)) ** 2
             
-            # 最终信道幅度（线性值）
-            sat_mag = A_trans * A_rec * Gamma * fspl_factor
+            # Friis 给出的是功率增益 beta；复信道幅度应使用 sqrt(beta)，
+            # 这样后续 |h|^2 恰好等于 |small_scale_fading|^2 * beta。
+            friis_power_gain = A_trans * A_rec * Gamma * fspl_factor
+            sat_mag = np.sqrt(np.maximum(friis_power_gain, 0.0))
             
             # 乘以小尺度衰落
             channel_[:, sat_idx] = small_scale_fading[:, sat_idx] * sat_mag
@@ -276,7 +279,8 @@ class RATDistanceCalculator:
         # 频率从 2 GHz 增加到 14 GHz（Ku 波段），路径损耗增加 49 倍
         # 虽然频率降低了，但仍需要保持较大的增益值来补偿
         # 这里设置一个较大的增益值来补偿 Ku 波段的路径损耗
-        gain_sat = np.full(self.M3, 10000.0, dtype=float)  # 40 dBi（保持较大值）
+        # gain_sat = np.full(self.M3, 10000.0, dtype=float)  # 额外 40 dB（暂时禁用）
+        gain_sat = np.ones(self.M3, dtype=float)  # 0 dB：不添加额外卫星增益
         gain_per_rat = np.concatenate([gain_terrestrial, gain_sat])
         
         # 扩展到所有用户
@@ -335,8 +339,9 @@ class RATDistanceCalculator:
                 L_gw = d_gw
                 F_Hz = f_down  # 使用下行频率
                 fspl_factor_gw = (C / (4.0 * np.pi * L_gw * F_Hz + eps)) ** 2
-                # 注意：卫星到gateway是确定性链路（无小尺度衰落），所以只计算大尺度信道增益
-                ch_mag_gw = A_trans * A_rec * Gamma_gw * fspl_factor_gw
+                # Friis 给出功率增益；这里返回对应的确定性复信道幅度。
+                friis_power_gain_gw = A_trans * A_rec * Gamma_gw * fspl_factor_gw
+                ch_mag_gw = np.sqrt(max(friis_power_gain_gw, 0.0))
 
                 ch_gw_list.append(ch_mag_gw)
 
@@ -367,9 +372,9 @@ def _complex_matrix_to_str(mat: np.ndarray) -> np.ndarray:
 def main():
     import os
 
-    k1_u = 10
-    k2_u = 10
-    k3_u = 10
+    k1_u = 30
+    k2_u = 30
+    k3_u = 30
     k1_e = 30
     k2_e = 30
     k3_e = 30
@@ -401,22 +406,8 @@ def main():
     os.makedirs("Data", exist_ok=True)
     os.makedirs("Channel", exist_ok=True)
 
-    # np.savetxt(
-    #     os.path.join("Channel", "channel_{}_{}.csv".format(k_urllc, k_embb)),
-    #     _complex_matrix_to_str(channel),
-    #     delimiter=",",
-    #     fmt="%s",
-    # )
-
-    # channel_urllc = channel[:k_urllc, :]
-    # channel_embb = channel[k_urllc:, :]
-
-    # np.savetxt("Channel/channel_URLLC_{}_{}.csv".format(k_urllc, k_embb), _complex_matrix_to_str(channel_urllc), delimiter=",", fmt="%s")
-    # np.savetxt("Channel/channel_eMBB_{}_{}.csv".format(k_urllc, k_embb), _complex_matrix_to_str(channel_embb), delimiter=",", fmt="%s")
-
-
     np.savetxt(
-        os.path.join("Test_Data/Channel", "channel_{}_{}.csv".format(k_urllc, k_embb)),
+        os.path.join("Channel", "channel_{}_{}.csv".format(k_urllc, k_embb)),
         _complex_matrix_to_str(channel),
         delimiter=",",
         fmt="%s",
@@ -425,8 +416,22 @@ def main():
     channel_urllc = channel[:k_urllc, :]
     channel_embb = channel[k_urllc:, :]
 
-    np.savetxt("Test_Data/Channel/channel_URLLC_{}_{}.csv".format(k_urllc, k_embb), _complex_matrix_to_str(channel_urllc), delimiter=",", fmt="%s")
-    np.savetxt("Test_Data/Channel/channel_eMBB_{}_{}.csv".format(k_urllc, k_embb), _complex_matrix_to_str(channel_embb), delimiter=",", fmt="%s")
+    np.savetxt("Channel/channel_URLLC_{}_{}.csv".format(k_urllc, k_embb), _complex_matrix_to_str(channel_urllc), delimiter=",", fmt="%s")
+    np.savetxt("Channel/channel_eMBB_{}_{}.csv".format(k_urllc, k_embb), _complex_matrix_to_str(channel_embb), delimiter=",", fmt="%s")
+
+
+    # np.savetxt(
+    #     os.path.join("Test_Data/Channel", "channel_{}_{}.csv".format(k_urllc, k_embb)),
+    #     _complex_matrix_to_str(channel),
+    #     delimiter=",",
+    #     fmt="%s",
+    # )
+
+    # channel_urllc = channel[:k_urllc, :]
+    # channel_embb = channel[k_urllc:, :]
+
+    # np.savetxt("Test_Data/Channel/channel_URLLC_{}_{}.csv".format(k_urllc, k_embb), _complex_matrix_to_str(channel_urllc), delimiter=",", fmt="%s")
+    # np.savetxt("Test_Data/Channel/channel_eMBB_{}_{}.csv".format(k_urllc, k_embb), _complex_matrix_to_str(channel_embb), delimiter=",", fmt="%s")
 
 
 

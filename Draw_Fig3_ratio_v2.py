@@ -94,7 +94,7 @@ with style_context:
     )
 
     ax.set_ylabel("Average cost", fontsize=size_yxlim)
-    ax.set_xlabel("Ratio between $K_u$ and $K_e$", fontsize=size_yxlim)
+    ax.set_xlabel("Ratio between $K^u$ and $K^e$", fontsize=size_yxlim)
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
     ax.tick_params(axis="both", labelsize=size_tick)
