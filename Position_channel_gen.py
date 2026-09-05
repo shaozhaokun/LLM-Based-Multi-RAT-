@@ -48,9 +48,9 @@ class RATDistanceCalculator:
         # 虽然频率降低了，但 Ku 波段仍然需要很大的增益来补偿路径损耗
         # 注意：保持较大的增益值，因为即使 Ku 波段路径损耗比 Ka 波段小，仍然很大
         # - G_m（卫星天线增益）：40 dBi = 10^4（线性功率增益）
-        # - g（用户终端天线增益）：30 dBi = 10^3（线性功率增益）
+        # - g（用户终端天线增益）：33 dBi = 10^(33/10)（线性功率增益）
         self.G_sat = np.full(self.M3, 10000.0, dtype=float)  # G_m（线性，40 dBi）
-        self.g_sat = np.full(self.M3, 1000.0, dtype=float)   # g_{k,m}^{up,phi}（线性，30 dBi）
+        self.g_sat = np.full(self.M3, 10.0 ** (33.0 / 10.0), dtype=float)  # 33 dBi
         # 注意：新模型（基于 Friis 传输方程）不再使用雨衰参数
         # 以下参数保留是为了兼容性，但新模型中不会被使用
         # 如果需要考虑雨衰，可以在新模型的基础上额外添加雨衰项
